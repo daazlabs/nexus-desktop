@@ -295,7 +295,22 @@ export async function listOpenAiToolsForConnectors(): Promise<any[]> {
       const mcpTools = await mcpClient.listTools(conn)
       for (const t of mcpTools) tools.push(mcpClient.mcpToolToOpenai(def.id, t))
     } catch (e) {
-      console.warn(`[mcp] listTools failed for '${def.id}':`, e)
+      // A ligação em cache pode ter morrido entretanto (o subprocesso do
+      // servidor MCP crashou, a instância remota reiniciou, etc.) —
+      // `connections` guardava a referência morta para sempre, por isso um
+      // conector que falhasse uma vez ficava sem ferramentas até a app
+      // inteira ser reiniciada. Tenta uma vez mais com ligação nova.
+      console.warn(`[mcp] listTools failed for '${def.id}', reconnecting:`, e)
+      connections.delete(def.id)
+      const fresh = await getConnection(def.id)
+      if (fresh) {
+        try {
+          const mcpTools = await mcpClient.listTools(fresh)
+          for (const t of mcpTools) tools.push(mcpClient.mcpToolToOpenai(def.id, t))
+        } catch (e2) {
+          console.warn(`[mcp] listTools retry failed for '${def.id}':`, e2)
+        }
+      }
     }
   }
   return tools
@@ -324,7 +339,17 @@ export async function dispatchMcpCall(
   try {
     return await mcpClient.callTool(conn, toolName, args)
   } catch (e: any) {
-    return `Error executing MCP tool '${name}': ${e.message}`
+    // Mesma lógica de auto-recuperação do listOpenAiToolsForConnectors — a
+    // ligação em cache pode ter morrido entretanto.
+    console.warn(`[mcp] callTool failed for '${name}', reconnecting:`, e)
+    connections.delete(connectorId)
+    const fresh = await getConnection(connectorId)
+    if (!fresh) return `Error: connector '${connectorId}' is not connected.`
+    try {
+      return await mcpClient.callTool(fresh, toolName, args)
+    } catch (e2: any) {
+      return `Error executing MCP tool '${name}': ${e2.message}`
+    }
   }
 }
 
