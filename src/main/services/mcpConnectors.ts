@@ -121,6 +121,21 @@ const CONNECTOR_DEFS: Record<string, ConnectorDef> = {
       return { WP_SITE_URL: blob.site_url, WP_USERNAME: blob.username, WP_APP_PASSWORD: blob.app_password }
     },
   },
+  // n8n uses an API key (Settings → n8n API on self-hosted instances) — no
+  // OAuth, just like WordPress. Unlike the web chat, Desktop has no
+  // container networking gotcha: "http://localhost:5678" here means this
+  // same machine, so a locally-run n8n just works.
+  n8n: {
+    id: 'n8n',
+    name: 'n8n',
+    transport: 'stdio',
+    authMethod: 'pat',
+    command: nodeServer('n8n-server'),
+    buildEnv: (token) => {
+      const blob = JSON.parse(token)
+      return { N8N_BASE_URL: blob.base_url, N8N_API_KEY: blob.api_key }
+    },
+  },
 }
 
 function vaultKey(connectorId: string): string {
@@ -165,6 +180,14 @@ export function setWordPressCredentials(siteUrl: string, username: string, appPa
     app_password: appPassword.trim(),
   })
   saveSystemKey(vaultKey('wordpress'), blob)
+}
+
+export function setN8nCredentials(baseUrl: string, apiKey: string): void {
+  const blob = JSON.stringify({
+    base_url: baseUrl.trim().replace(/\/+$/, ''),
+    api_key: apiKey.trim(),
+  })
+  saveSystemKey(vaultKey('n8n'), blob)
 }
 
 export async function connectOAuth(connectorId: string): Promise<ConnectorState[]> {

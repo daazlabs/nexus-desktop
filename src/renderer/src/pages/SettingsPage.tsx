@@ -50,6 +50,7 @@ export default function SettingsPage({ lang, themeColor, setThemeColor, onNaviga
   const [connectorInput, setConnectorInput] = useState<Record<string, string>>({})
   const [connectorSaving, setConnectorSaving] = useState<string | null>(null)
   const [wpForm, setWpForm] = useState({ siteUrl: "", username: "", appPassword: "" })
+  const [n8nForm, setN8nForm] = useState({ baseUrl: "", apiKey: "" })
 
   const loadConnectors = () => api.listConnectors().then(setConnectors).catch(() => {})
 
@@ -147,6 +148,20 @@ export default function SettingsPage({ lang, themeColor, setThemeColor, onNaviga
     setConnectorSaving(null)
   }
 
+  const connectN8n = async () => {
+    const { baseUrl, apiKey } = n8nForm
+    if (!baseUrl.trim() || !apiKey.trim()) return
+    setConnectorSaving("n8n")
+    try {
+      await api.setN8nCredentials(baseUrl, apiKey)
+      setN8nForm({ baseUrl: "", apiKey: "" })
+      await loadConnectors()
+    } catch (err) {
+      setMsg({ id: "n8n", text: `Error: ${err instanceof Error ? err.message : "?"}`, ok: false })
+    }
+    setConnectorSaving(null)
+  }
+
   const disconnectConnector = async (connectorId: string) => {
     setConnectorSaving(connectorId)
     try {
@@ -188,8 +203,8 @@ export default function SettingsPage({ lang, themeColor, setThemeColor, onNaviga
             : tabLabel.key === "paid" ? t(lang, "settingsPaidDesc")
             : tabLabel.key === "local" ? t(lang, "settingsLocalDesc")
             : (lang === "pt"
-                ? "Liga as tuas próprias contas externas (GitHub, Google Drive, Gmail, WordPress) para o assistente as poder usar em modo BUILD. Cada conector usa a tua própria conta — nada é partilhado com outros utilizadores."
-                : "Link your own external accounts (GitHub, Google Drive, Gmail, WordPress) so the assistant can use them in BUILD mode. Each connector uses your own account — nothing is shared with other users.")}
+                ? "Liga as tuas próprias contas externas (GitHub, Google Drive, Gmail, WordPress, n8n) para o assistente as poder usar em modo BUILD. Cada conector usa a tua própria conta — nada é partilhado com outros utilizadores."
+                : "Link your own external accounts (GitHub, Google Drive, Gmail, WordPress, n8n) so the assistant can use them in BUILD mode. Each connector uses your own account — nothing is shared with other users.")}
         </p>
         {tab === "connectors" && (
           <button onClick={() => onNavigate("faq")} className="text-primary hover:text-primary/80 text-xs mb-4 inline-block transition-colors">
@@ -252,6 +267,37 @@ export default function SettingsPage({ lang, themeColor, setThemeColor, onNaviga
                       <button
                         onClick={connectWordPress}
                         disabled={connectorSaving === "wordpress" || !wpForm.siteUrl.trim() || !wpForm.username.trim() || !wpForm.appPassword.trim()}
+                        className="bg-primary text-primary-foreground rounded-full px-4 py-2 font-medium text-sm hover:opacity-90 disabled:opacity-50 transition-opacity whitespace-nowrap">
+                        {lang === "pt" ? "Ligar" : "Connect"}
+                      </button>
+                    </div>
+                  </div>
+                ) : c.id === "n8n" ? (
+                  <div className="space-y-2">
+                    <input
+                      className="w-full rounded-lg px-3 py-2 border border-border bg-input/30 text-foreground text-sm outline-none font-mono"
+                      type="url"
+                      value={n8nForm.baseUrl}
+                      onChange={e => setN8nForm(prev => ({ ...prev, baseUrl: e.target.value }))}
+                      placeholder={lang === "pt" ? "URL da instância (ex: http://localhost:5678)" : "Instance URL (e.g. http://localhost:5678)"}
+                    />
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-xs text-muted-foreground">API Key</label>
+                      <span className="text-xs text-muted-foreground/60">
+                        {lang === "pt" ? "Definições → n8n API, na tua instância" : "Settings → n8n API, on your instance"}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <input
+                        className="flex-1 rounded-lg px-3 py-2 border border-border bg-input/30 text-foreground text-sm outline-none font-mono"
+                        type="password"
+                        value={n8nForm.apiKey}
+                        onChange={e => setN8nForm(prev => ({ ...prev, apiKey: e.target.value }))}
+                        placeholder={lang === "pt" ? "Cola a API key gerada" : "Paste the generated API key"}
+                      />
+                      <button
+                        onClick={connectN8n}
+                        disabled={connectorSaving === "n8n" || !n8nForm.baseUrl.trim() || !n8nForm.apiKey.trim()}
                         className="bg-primary text-primary-foreground rounded-full px-4 py-2 font-medium text-sm hover:opacity-90 disabled:opacity-50 transition-opacity whitespace-nowrap">
                         {lang === "pt" ? "Ligar" : "Connect"}
                       </button>

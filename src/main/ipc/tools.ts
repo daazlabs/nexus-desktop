@@ -305,6 +305,10 @@ export function registerIpcHandlers(): void {
     mcpConnectors.setWordPressCredentials(siteUrl, username, appPassword)
     return mcpConnectors.listConnectors()
   })
+  ipcMain.handle('nexus:connectors:setN8nCredentials', (_event, baseUrl: string, apiKey: string) => {
+    mcpConnectors.setN8nCredentials(baseUrl, apiKey)
+    return mcpConnectors.listConnectors()
+  })
 
   ipcMain.handle('nexus:providers:list', () => listProviders())
   ipcMain.handle('nexus:providers:modelsByClass', (_event, modelClass: string) => getModelsByClass(modelClass))
