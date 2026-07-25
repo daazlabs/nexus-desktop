@@ -17,6 +17,25 @@ files:
   - src/renderer/dist/**/*
   - package.json
 
+# Local MCP connectors (gdrive/gmail/wordpress/n8n) are spawned as `node
+# <resources>/mcp-servers/<name>/dist/index.js` — see nodeServer() in
+# mcpConnectors.ts. Each needs its own compiled dist/, package.json, and
+# node_modules/ (their runtime deps, e.g. @modelcontextprotocol/sdk) present
+# in the packaged app, not just in the source repo.
+extraResources:
+  - from: ../mcp-servers/gdrive-server
+    to: mcp-servers/gdrive-server
+    filter: ['dist/**/*', 'package.json', 'node_modules/**/*']
+  - from: ../mcp-servers/gmail-server
+    to: mcp-servers/gmail-server
+    filter: ['dist/**/*', 'package.json', 'node_modules/**/*']
+  - from: ../mcp-servers/wordpress-server
+    to: mcp-servers/wordpress-server
+    filter: ['dist/**/*', 'package.json', 'node_modules/**/*']
+  - from: ../mcp-servers/n8n-server
+    to: mcp-servers/n8n-server
+    filter: ['dist/**/*', 'package.json', 'node_modules/**/*']
+
 linux:
   target:
     - AppImage

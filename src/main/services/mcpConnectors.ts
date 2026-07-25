@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { app } from 'electron'
 import { saveSystemKey, getSystemKey, deleteSystemKey, hasVaultKey } from './keyVault.js'
 import * as mcpClient from './mcpClient.js'
 import * as oauthFlow from './oauthFlow.js'
@@ -9,10 +10,17 @@ import type { McpConnection } from './mcpClient.js'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 // dist-electron/main/services/mcpConnectors.js -> .../daaznexus (repo root,
 // sibling of nexus-desktop/ — see mcp-servers/ layout in the plan).
+// Only valid for a dev/unpacked run: nexus-desktop/ then sits inside the
+// daaznexus checkout. A packaged app has no such sibling repo on the user's
+// disk, so mcp-servers/ is copied into the app's own resources at build time
+// (see electron-builder.yml extraResources) and read from there instead.
 const REPO_ROOT = path.resolve(__dirname, '..', '..', '..', '..')
 
 function nodeServer(name: string): string[] {
-  return ['node', path.join(REPO_ROOT, 'mcp-servers', name, 'dist', 'index.js')]
+  const base = app.isPackaged
+    ? path.join(process.resourcesPath, 'mcp-servers', name)
+    : path.join(REPO_ROOT, 'mcp-servers', name)
+  return ['node', path.join(base, 'dist', 'index.js')]
 }
 
 interface ConnectorDef {
