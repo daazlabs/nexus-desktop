@@ -77,6 +77,14 @@ const api = {
       return () => { cleanup(); ipcRenderer.send('nexus:stream:cancel', { id }) }
     },
   },
+  skills: {
+    list: () => ipcRenderer.invoke('nexus:skills:list'),
+    create: (name: string, description: string, instructions: string) =>
+      ipcRenderer.invoke('nexus:skills:create', name, description, instructions),
+    update: (id: number, name: string, description: string, instructions: string) =>
+      ipcRenderer.invoke('nexus:skills:update', id, name, description, instructions),
+    delete: (id: number) => ipcRenderer.invoke('nexus:skills:delete', id),
+  },
   vault: {
     getKeys: () => ipcRenderer.invoke('nexus:vault:getKeys'),
     setKey: (provider: string, key: string) =>

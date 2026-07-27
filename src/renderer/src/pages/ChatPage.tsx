@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback, useMemo, useReducer, type Cha
 import { api } from "../api/client"
 import type { Message, ModelClassKey, CategorizedProvider, ToolEvent, PermissionRequest, Project } from "../types"
 import type { Page } from "../constants"
-import { BarChart3, Settings, HelpCircle, Sun, Moon, X, AlignLeft, MoreVertical, Plus, Brain, Download, ArrowDown } from "lucide-react"
+import { BarChart3, Settings, HelpCircle, Sun, Moon, X, AlignLeft, MoreVertical, Plus, Brain, Wrench, Download, ArrowDown } from "lucide-react"
 import type { Lang } from "../i18n"
 import { t } from "../i18n"
 import ConversationSidebar from "../components/chat/ConversationSidebar"
@@ -756,6 +756,10 @@ export default function ChatPage({ onNavigate, colorMode, setColorMode, lang, se
                 className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm text-foreground hover:bg-accent transition-colors">
                 <Brain size={16} className="text-muted-foreground" /> {lang === "pt" ? "Memórias" : "Memories"}
               </button>
+              <button onClick={() => { setMobileMenuOpen(false); onNavigate("skills") }}
+                className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm text-foreground hover:bg-accent transition-colors">
+                <Wrench size={16} className="text-muted-foreground" /> {lang === "pt" ? "Minhas Skills" : "My Skills"}
+              </button>
               <button onClick={() => { setMobileMenuOpen(false); onNavigate("analytics") }}
                 className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm text-foreground hover:bg-accent transition-colors">
                 <BarChart3 size={16} className="text-muted-foreground" /> {t(lang, "analyticsTitle")}
@@ -818,6 +822,11 @@ export default function ChatPage({ onNavigate, colorMode, setColorMode, lang, se
               className="p-2 rounded-full text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
               title={t(lang, "analyticsTitle")}>
               <BarChart3 size={18} />
+            </button>
+            <button onClick={() => onNavigate("skills")}
+              className="p-2 rounded-full text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+              title={lang === "pt" ? "Minhas Skills" : "My Skills"}>
+              <Wrench size={18} />
             </button>
             <button onClick={() => onNavigate("memories")}
               className="p-2 rounded-full text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"

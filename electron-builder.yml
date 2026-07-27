@@ -23,6 +23,10 @@ files:
 # node_modules/ (their runtime deps, e.g. @modelcontextprotocol/sdk) present
 # in the packaged app, not just in the source repo.
 extraResources:
+  # Global skills (see src/main/tools/skills.ts) — bundled markdown recipes,
+  # same for every install.
+  - from: skills
+    to: skills
   - from: ../mcp-servers/gdrive-server
     to: mcp-servers/gdrive-server
     filter: ['dist/**/*', 'package.json', 'node_modules/**/*']

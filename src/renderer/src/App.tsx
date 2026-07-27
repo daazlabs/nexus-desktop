@@ -8,6 +8,7 @@ import ChatPage from "./pages/ChatPage"
 import SettingsPage from "./pages/SettingsPage"
 import AnalyticsPage from "./pages/AnalyticsPage"
 import MemoriesPage from "./pages/MemoriesPage"
+import SkillsPage from "./pages/SkillsPage"
 import FAQPage from "./pages/FAQPage"
 import PermissionModal from "./components/PermissionModal"
 
@@ -73,6 +74,13 @@ export default function App() {
     <>
       {permModal}
       <MemoriesPage lang={lang} onNavigate={setPage} />
+    </>
+  )
+
+  if (page === "skills") return (
+    <>
+      {permModal}
+      <SkillsPage lang={lang} onNavigate={setPage} />
     </>
   )
 

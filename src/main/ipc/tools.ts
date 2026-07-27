@@ -7,6 +7,7 @@ import { resolveKey, saveSystemKey, deleteSystemKey, listVaultProviders } from '
 import { routeWithFallback, routeWithFallbackStream, getCooldownState } from '../services/fallbackChain.js'
 import * as mcpConnectors from '../services/mcpConnectors.js'
 import { maybeEnrichWithWeb } from '../services/webSearch.js'
+import * as skills from '../tools/skills.js'
 import type { ChatMessage } from '../services/providerClients.js'
 
 const activeStreams = new Map<string, boolean>()
@@ -33,7 +34,10 @@ const BUILD_MODE_SYSTEM_PROMPT: Record<string, string> = {
 function withModeSystemPrompt(messages: ChatMessage[], toolsEnabled: boolean, lang?: string): ChatMessage[] {
   const table = toolsEnabled ? BUILD_MODE_SYSTEM_PROMPT : PLAN_MODE_SYSTEM_PROMPT
   const text = table[lang === 'en' ? 'en' : 'pt']
-  return [{ role: 'system', content: text }, ...messages]
+  // Skills only make sense in BUILD mode (usar_skill is only attached to the
+  // tools array there) — PLAN mode gets the base prompt only.
+  const withSkills = toolsEnabled ? text + skills.catalogPrompt() : text
+  return [{ role: 'system', content: withSkills }, ...messages]
 }
 
 // Read-only, so — unlike bash/write_file — it runs in PLAN mode too, not just
@@ -254,6 +258,20 @@ const DESKTOP_TOOLS = [
       },
     },
   },
+  {
+    type: 'function' as const,
+    function: {
+      name: 'usar_skill',
+      description: 'Load the step-by-step instructions for a named skill (a reusable recipe for a recurring task, see the skills list in the system prompt). Call this before attempting a matching task yourself, then follow the returned instructions.',
+      parameters: {
+        type: 'object',
+        properties: {
+          nome: { type: 'string', description: 'Exact skill name, from the available skills list in the system prompt.' },
+        },
+        required: ['nome'],
+      },
+    },
+  },
 ]
 
 export function registerIpcHandlers(): void {
@@ -420,6 +438,26 @@ export function registerIpcHandlers(): void {
   })
 
   ipcMain.handle('nexus:providers:cooldowns', () => getCooldownState())
+
+  ipcMain.handle('nexus:skills:list', () => skills.listPersonalSkills())
+  ipcMain.handle('nexus:skills:create', (_event, name: string, description: string, instructions: string) => {
+    try {
+      return { ok: true, skill: skills.createPersonalSkill(name, description, instructions) }
+    } catch (err: any) {
+      return { ok: false, error: err?.message || 'Could not save.' }
+    }
+  })
+  ipcMain.handle('nexus:skills:update', (_event, id: number, name: string, description: string, instructions: string) => {
+    try {
+      return { ok: true, skill: skills.updatePersonalSkill(id, name, description, instructions) }
+    } catch (err: any) {
+      return { ok: false, error: err?.message || 'Could not save.' }
+    }
+  })
+  ipcMain.handle('nexus:skills:delete', (_event, id: number) => {
+    skills.deletePersonalSkill(id)
+    return { detail: 'deleted' }
+  })
 
   ipcMain.handle('nexus:app:getVersion', () => app.getVersion())
 

@@ -5,6 +5,7 @@ import { checkAndRecord } from './rateLimiter.js'
 import { recordAttempt } from './analytics.js'
 import { isProviderDisabled } from './healthChecker.js'
 import { createExcel, createWord, createPowerpoint, createPdf } from '../tools/office.js'
+import { usarSkill } from '../tools/skills.js'
 
 const MAX_TOOL_ITERATIONS = 10
 const TIMEOUT = 30000
@@ -276,6 +277,8 @@ async function executeToolCall(
   }
 
   switch (name) {
+    case 'usar_skill':
+      return usarSkill(args.nome)
     case 'read_file': {
       const resolved = resolve(args.path)
       if (requestPermission) {

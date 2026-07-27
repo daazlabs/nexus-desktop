@@ -262,6 +262,27 @@ export const api = {
     return { detail: "cleared" }
   },
 
+  listSkills: async (): Promise<{ skills: { id: number; name: string; description: string; instructions: string; created_at: string }[] }> => {
+    const skills = await nexusApi.skills?.list?.() || []
+    return { skills }
+  },
+
+  createSkill: async (name: string, description: string, instructions: string) => {
+    const res = await nexusApi.skills?.create?.(name, description, instructions)
+    if (!res?.ok) throw new Error(res?.error || "Could not save.")
+    return res.skill
+  },
+
+  updateSkill: async (id: number, name: string, description: string, instructions: string) => {
+    const res = await nexusApi.skills?.update?.(id, name, description, instructions)
+    if (!res?.ok) throw new Error(res?.error || "Could not save.")
+    return res.skill
+  },
+
+  deleteSkill: async (id: number): Promise<{ detail: string }> => {
+    return await nexusApi.skills?.delete?.(id) || { detail: "deleted" }
+  },
+
   getAgentConfig: async (agentId: string): Promise<any> => {
     const hasKey = !!(await nexusApi.vault?.resolveKey?.(agentId))
     try {
