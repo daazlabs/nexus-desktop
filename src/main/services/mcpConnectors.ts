@@ -5,6 +5,8 @@ import { app } from 'electron'
 import { saveSystemKey, getSystemKey, deleteSystemKey, hasVaultKey } from './keyVault.js'
 import * as mcpClient from './mcpClient.js'
 import * as oauthFlow from './oauthFlow.js'
+import * as customMcpServers from './customMcpServers.js'
+import * as autocadRuntime from './autocadRuntime.js'
 import type { McpConnection } from './mcpClient.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -217,6 +219,33 @@ export async function connectOAuth(connectorId: string): Promise<ConnectorState[
   return listConnectors()
 }
 
+export interface AutocadStatus {
+  supported: boolean
+  provisioned: boolean
+  connected: boolean
+}
+
+export function getAutocadStatus(): AutocadStatus {
+  return {
+    supported: autocadRuntime.isSupportedPlatform(),
+    provisioned: autocadRuntime.isProvisioned(),
+    connected: connections.has('autocad'),
+  }
+}
+
+// Drives the one-click "Ligar AutoCAD" button: provisions the private
+// Python runtime if needed (no-op if already done — see
+// autocadRuntime.ensureAutocadRuntime), then immediately attempts a real
+// connection so failures (AutoCAD not installed/open, COM error) surface
+// right away instead of silently waiting for the first chat tool call.
+export async function installAutocad(onProgress?: (step: string, pct: number) => void): Promise<AutocadStatus> {
+  await autocadRuntime.ensureAutocadRuntime(onProgress)
+  connections.delete('autocad')
+  const conn = await getAutocadConnection()
+  if (!conn) throw new Error('Não foi possível ligar ao AutoCAD. Confirma que o AutoCAD está aberto e tenta novamente.')
+  return getAutocadStatus()
+}
+
 export async function disconnectConnector(connectorId: string): Promise<void> {
   const conn = connections.get(connectorId)
   if (conn) {
@@ -268,12 +297,39 @@ async function resolveAccessToken(connectorId: string, def: ConnectorDef): Promi
   }
 }
 
+// AutoCAD isn't in CONNECTOR_DEFS: unlike the token/OAuth-based connectors,
+// there's no credential to store — the "connection" is a self-provisioned
+// local Python runtime (see autocadRuntime.ts) whose command/args/cwd are
+// only known once that provisioning has actually happened. Provisioning
+// itself is driven by installAutocad() (with progress callbacks for the
+// Settings UI); this just (re)connects to an already-provisioned runtime.
+async function getAutocadConnection(): Promise<McpConnection | null> {
+  const existing = connections.get('autocad')
+  if (existing) return existing
+  if (!autocadRuntime.isProvisioned()) return null
+  try {
+    const target = await autocadRuntime.ensureAutocadRuntime()
+    const conn = await mcpClient.connectStdio('autocad', target.command, target.args, undefined, target.cwd)
+    connections.set('autocad', conn)
+    return conn
+  } catch (e) {
+    console.warn(`[mcp] failed to connect 'autocad':`, e)
+    return null
+  }
+}
+
 async function getConnection(connectorId: string): Promise<McpConnection | null> {
   const existing = connections.get(connectorId)
   if (existing) return existing
 
+  if (connectorId === 'autocad') return getAutocadConnection()
+
   const def = CONNECTOR_DEFS[connectorId]
-  if (!def) return null
+  // Not one of the hardcoded first-party connectors (GitHub/Drive/Gmail/
+  // WordPress/n8n/AutoCAD) — fall through to the user-defined servers
+  // registry (custom MCP servers the user configured by hand), which owns
+  // its own connection cache and reconnection logic.
+  if (!def) return customMcpServers.getConnection(connectorId)
   const token = await resolveAccessToken(connectorId, def)
   if (!token) return null
 
@@ -321,6 +377,28 @@ export async function listOpenAiToolsForConnectors(): Promise<any[]> {
       }
     }
   }
+  if (autocadRuntime.isProvisioned()) {
+    const conn = await getAutocadConnection()
+    if (conn) {
+      try {
+        const mcpTools = await mcpClient.listTools(conn)
+        for (const t of mcpTools) tools.push(mcpClient.mcpToolToOpenai('autocad', t))
+      } catch (e) {
+        console.warn(`[mcp] listTools failed for 'autocad', reconnecting:`, e)
+        connections.delete('autocad')
+        const fresh = await getAutocadConnection()
+        if (fresh) {
+          try {
+            const mcpTools = await mcpClient.listTools(fresh)
+            for (const t of mcpTools) tools.push(mcpClient.mcpToolToOpenai('autocad', t))
+          } catch (e2) {
+            console.warn(`[mcp] listTools retry failed for 'autocad':`, e2)
+          }
+        }
+      }
+    }
+  }
+  tools.push(...(await customMcpServers.listOpenAiTools()))
   return tools
 }
 
@@ -370,4 +448,5 @@ export async function closeAllConnections(): Promise<void> {
     }
   }
   connections.clear()
+  await customMcpServers.closeAll()
 }

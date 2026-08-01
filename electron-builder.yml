@@ -51,6 +51,15 @@ linux:
 win:
   target:
     - nsis
+  # AutoCAD MCP server (vendored CAD-MCP, see mcp-servers/autocad-server/
+  # NOTICE.md) — pure Python source, no node_modules to bundle. Win-only:
+  # COM automation (pywin32) has no macOS/Linux equivalent, and
+  # autocadRuntime.ts provisions its own private Python at runtime, so
+  # nothing else needs bundling alongside it.
+  extraResources:
+    - from: ../mcp-servers/autocad-server
+      to: mcp-servers/autocad-server
+      filter: ['src/**/*', 'LICENSE', 'NOTICE.md']
 
 mac:
   target:

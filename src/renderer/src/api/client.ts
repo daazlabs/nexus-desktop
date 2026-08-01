@@ -366,4 +366,42 @@ export const api = {
   disconnectConnector: async (connectorId: string) => {
     return await nexusApi.connectors?.disconnect?.(connectorId)
   },
+
+  getAutocadStatus: async (): Promise<{ supported: boolean; provisioned: boolean; connected: boolean }> => {
+    return await nexusApi.connectors?.autocadStatus?.() || { supported: false, provisioned: false, connected: false }
+  },
+
+  installAutocad: (
+    onProgress: (data: { step: string; pct: number }) => void,
+    onDone: (data: { ok: boolean; status?: unknown; error?: string }) => void,
+  ): (() => void) => {
+    return nexusApi.connectors?.autocadInstall?.(onProgress, onDone) ?? (() => {})
+  },
+
+  listMcpServers: async (): Promise<{
+    id: string; command: string; args: string[]; env: Record<string, string>
+    enabled: boolean; transport: "stdio" | "http"; url?: string; cwd?: string
+    status: "connected" | "disconnected" | "error"; error?: string; toolCount?: number
+  }[]> => {
+    return await nexusApi.mcp?.list?.() || []
+  },
+
+  upsertMcpServer: async (id: string, def: {
+    command: string; args: string[]; env?: Record<string, string>
+    enabled?: boolean; transport?: "stdio" | "http"; url?: string; cwd?: string
+  }) => {
+    return await nexusApi.mcp?.upsert?.(id, def)
+  },
+
+  removeMcpServer: async (id: string) => {
+    return await nexusApi.mcp?.remove?.(id)
+  },
+
+  testMcpServer: async (id: string): Promise<{ ok: boolean; error?: string; tools?: { name: string; description?: string }[] }> => {
+    return await nexusApi.mcp?.test?.(id) || { ok: false, error: "IPC unavailable" }
+  },
+
+  pickFile: async (): Promise<string | null> => {
+    return await nexusApi.dialog?.openFile?.() ?? null
+  },
 }

@@ -52,7 +52,28 @@ export default function SettingsPage({ lang, themeColor, setThemeColor, onNaviga
   const [wpForm, setWpForm] = useState({ siteUrl: "", username: "", appPassword: "" })
   const [n8nForm, setN8nForm] = useState({ baseUrl: "", apiKey: "" })
 
+  type McpServerRow = {
+    id: string; command: string; args: string[]; env: Record<string, string>
+    enabled: boolean; transport: "stdio" | "http"; url?: string; cwd?: string
+    status: "connected" | "disconnected" | "error"; error?: string; toolCount?: number
+  }
+  const emptyMcpForm = { id: "", command: "", argsText: "", envText: "", transport: "stdio" as "stdio" | "http", url: "", cwd: "" }
+  const [mcpServers, setMcpServers] = useState<McpServerRow[]>([])
+  const [mcpForm, setMcpForm] = useState(emptyMcpForm)
+  const [mcpFormOpen, setMcpFormOpen] = useState(false)
+  const [mcpSaving, setMcpSaving] = useState(false)
+  const [mcpError, setMcpError] = useState<string | null>(null)
+  const [mcpTesting, setMcpTesting] = useState<string | null>(null)
+  const [mcpTestResult, setMcpTestResult] = useState<Record<string, { ok: boolean; error?: string; toolCount?: number }>>({})
+
+  const [autocadStatus, setAutocadStatus] = useState<{ supported: boolean; provisioned: boolean; connected: boolean } | null>(null)
+  const [autocadInstalling, setAutocadInstalling] = useState(false)
+  const [autocadProgress, setAutocadProgress] = useState<{ step: string; pct: number } | null>(null)
+  const [autocadError, setAutocadError] = useState<string | null>(null)
+
   const loadConnectors = () => api.listConnectors().then(setConnectors).catch(() => {})
+  const loadMcpServers = () => api.listMcpServers().then(setMcpServers).catch(() => {})
+  const loadAutocadStatus = () => api.getAutocadStatus().then(setAutocadStatus).catch(() => {})
 
   useEffect(() => {
     api.getProvidersCategorized().then(setCategorized).catch(() => {})
@@ -60,6 +81,8 @@ export default function SettingsPage({ lang, themeColor, setThemeColor, onNaviga
     setRemoteUrl(saved.url)
     setRemoteKey(saved.key ? "••••••••" : "")
     loadConnectors()
+    loadMcpServers()
+    loadAutocadStatus()
   }, [])
 
   useEffect(() => {
@@ -169,6 +192,100 @@ export default function SettingsPage({ lang, themeColor, setThemeColor, onNaviga
       await loadConnectors()
     } finally {
       setConnectorSaving(null)
+    }
+  }
+
+  const installAutocad = () => {
+    setAutocadInstalling(true)
+    setAutocadError(null)
+    setAutocadProgress({ step: lang === "pt" ? "A começar…" : "Starting…", pct: 0 })
+    api.installAutocad(
+      (p) => setAutocadProgress(p),
+      async (res) => {
+        setAutocadInstalling(false)
+        setAutocadProgress(null)
+        if (!res.ok) setAutocadError(res.error || (lang === "pt" ? "Erro desconhecido." : "Unknown error."))
+        await loadAutocadStatus()
+      },
+    )
+  }
+
+  const parseArgs = (text: string): string[] => text.split("\n").map(l => l.trim()).filter(Boolean)
+  const parseEnv = (text: string): Record<string, string> => {
+    const env: Record<string, string> = {}
+    for (const line of text.split("\n")) {
+      const idx = line.indexOf("=")
+      if (idx <= 0) continue
+      env[line.slice(0, idx).trim()] = line.slice(idx + 1).trim()
+    }
+    return env
+  }
+
+  const openMcpForm = (preset?: Partial<typeof emptyMcpForm>) => {
+    setMcpForm({ ...emptyMcpForm, ...preset })
+    setMcpError(null)
+    setMcpFormOpen(true)
+  }
+
+  const pickMcpFile = async () => {
+    const picked = await api.pickFile()
+    if (!picked) return
+    setMcpForm(prev => ({ ...prev, argsText: prev.argsText ? prev.argsText : picked }))
+  }
+
+  const pickMcpCwd = async () => {
+    const picked = await api.openDirPicker()
+    if (!picked) return
+    setMcpForm(prev => ({ ...prev, cwd: picked }))
+  }
+
+  const saveMcpServer = async () => {
+    setMcpError(null)
+    const id = mcpForm.id.trim()
+    if (!id) { setMcpError(lang === "pt" ? "Falta o nome do servidor." : "Server name is required."); return }
+    if (mcpForm.transport === "http" ? !mcpForm.url.trim() : !mcpForm.command.trim()) {
+      setMcpError(lang === "pt" ? "Falta o comando (ou URL, para HTTP)." : "Missing command (or URL, for HTTP).")
+      return
+    }
+    setMcpSaving(true)
+    try {
+      await api.upsertMcpServer(id, {
+        command: mcpForm.command.trim(),
+        args: parseArgs(mcpForm.argsText),
+        env: parseEnv(mcpForm.envText),
+        transport: mcpForm.transport,
+        url: mcpForm.url.trim() || undefined,
+        cwd: mcpForm.cwd.trim() || undefined,
+        enabled: true,
+      })
+      setMcpFormOpen(false)
+      setMcpForm(emptyMcpForm)
+      await loadMcpServers()
+    } catch (err) {
+      setMcpError(err instanceof Error ? err.message : String(err))
+    }
+    setMcpSaving(false)
+  }
+
+  const toggleMcpServer = async (s: McpServerRow) => {
+    await api.upsertMcpServer(s.id, { command: s.command, args: s.args, env: s.env, transport: s.transport, url: s.url, cwd: s.cwd, enabled: !s.enabled })
+    await loadMcpServers()
+  }
+
+  const removeMcpServer = async (id: string) => {
+    await api.removeMcpServer(id)
+    setMcpTestResult(prev => { const next = { ...prev }; delete next[id]; return next })
+    await loadMcpServers()
+  }
+
+  const testMcpServer = async (id: string) => {
+    setMcpTesting(id)
+    try {
+      const res = await api.testMcpServer(id)
+      setMcpTestResult(prev => ({ ...prev, [id]: { ok: res.ok, error: res.error, toolCount: res.tools?.length } }))
+      await loadMcpServers()
+    } finally {
+      setMcpTesting(null)
     }
   }
 
@@ -349,6 +466,221 @@ export default function SettingsPage({ lang, themeColor, setThemeColor, onNaviga
               </div>
             )
           })}
+
+          <div className={`bg-card border rounded-xl p-4 transition-colors ${autocadStatus?.connected ? "border-green-700/40 border-l-4 border-l-green-500" : "border-border"}`}>
+            <div className="flex items-center justify-between mb-3">
+              <span className="font-medium text-sm text-foreground">AutoCAD</span>
+              {autocadStatus?.connected
+                ? <span className="inline-flex items-center gap-1 bg-green-500/15 text-green-400 border border-green-500/30 rounded-full px-2.5 py-0.5 text-xs font-medium">{lang === "pt" ? "Ligado" : "Connected"}</span>
+                : <span className="text-xs text-muted-foreground">{lang === "pt" ? "Desligado" : "Disconnected"}</span>}
+            </div>
+            {!autocadStatus?.supported ? (
+              <p className="text-xs text-muted-foreground">
+                {lang === "pt"
+                  ? "Só disponível no Windows — o AutoCAD é controlado via COM, uma tecnologia que não existe no macOS/Linux."
+                  : "Windows only — AutoCAD is controlled via COM automation, which doesn't exist on macOS/Linux."}
+              </p>
+            ) : autocadStatus?.connected ? (
+              <button
+                onClick={() => disconnectConnector("autocad")}
+                disabled={connectorSaving === "autocad"}
+                className="text-xs text-muted-foreground hover:text-destructive transition-colors disabled:opacity-50">
+                {lang === "pt" ? "Desligar" : "Disconnect"}
+              </button>
+            ) : (
+              <div className="space-y-2">
+                <p className="text-xs text-muted-foreground leading-relaxed">
+                  {lang === "pt"
+                    ? "Abre o AutoCAD e clica em Ligar. Na primeira vez demora um pouco (a app prepara tudo sozinha) — nada para instalar ou configurar à mão."
+                    : "Open AutoCAD, then click Connect. The first time takes a little while (the app sets everything up on its own) — nothing to install or configure by hand."}
+                </p>
+                <button
+                  onClick={installAutocad}
+                  disabled={autocadInstalling}
+                  className="bg-primary text-primary-foreground rounded-full px-4 py-2 font-medium text-sm hover:opacity-90 disabled:opacity-50 transition-opacity">
+                  {autocadInstalling ? (lang === "pt" ? "A ligar…" : "Connecting…") : (lang === "pt" ? "Ligar AutoCAD" : "Connect AutoCAD")}
+                </button>
+                {autocadProgress && (
+                  <div className="space-y-1">
+                    <div className="h-1.5 bg-border rounded-full overflow-hidden">
+                      <div className="h-full bg-primary transition-all" style={{ width: `${autocadProgress.pct}%` }} />
+                    </div>
+                    <p className="text-xs text-muted-foreground">{autocadProgress.step}</p>
+                  </div>
+                )}
+                {autocadError && <p className="text-xs text-red-400">{autocadError}</p>}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {tab === "connectors" && (
+        <div className="max-w-3xl mx-auto px-4 pb-2">
+          <div className="bg-card border border-border rounded-xl p-4">
+            <div className="flex items-center justify-between mb-1 flex-wrap gap-2">
+              <h3 className="text-foreground font-medium text-sm">{lang === "pt" ? "Servidores MCP" : "MCP Servers"}</h3>
+              <div className="flex items-center gap-2">
+                <button onClick={() => mcpFormOpen ? setMcpFormOpen(false) : openMcpForm()}
+                  className="text-xs border border-border text-muted-foreground hover:text-foreground rounded-full px-3 py-1 transition-colors">
+                  {mcpFormOpen ? (lang === "pt" ? "Cancelar" : "Cancel") : (lang === "pt" ? "+ Servidor" : "+ Server")}
+                </button>
+              </div>
+            </div>
+            <p className="text-muted-foreground text-xs mb-3 leading-relaxed">
+              {lang === "pt"
+                ? "Liga qualquer servidor MCP local (stdio) ou remoto (HTTP) — por exemplo um servidor MCP para AutoCAD instalado neste computador. As ferramentas ficam disponíveis para o assistente em modo BUILD, com o mesmo pedido de permissão usado para bash/ficheiros. Só adiciones servidores em que confies: o comando corre com acesso real à tua máquina."
+                : "Connect any local (stdio) or remote (HTTP) MCP server — for example an AutoCAD MCP server installed on this computer. Its tools become available to the assistant in BUILD mode, gated by the same permission prompt used for bash/files. Only add servers you trust: the command runs with real access to your machine."}
+            </p>
+
+            {mcpFormOpen && (
+              <div className="bg-background/40 border border-border rounded-lg p-3 mb-3 space-y-2">
+                <div>
+                  <label className="text-xs text-muted-foreground block mb-1">{lang === "pt" ? "Nome (identificador único)" : "Name (unique id)"}</label>
+                  <input
+                    className="w-full rounded-lg px-3 py-2 border border-border bg-input/30 text-foreground text-sm outline-none font-mono"
+                    value={mcpForm.id}
+                    onChange={e => setMcpForm(prev => ({ ...prev, id: e.target.value }))}
+                    placeholder="autocad"
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="text-xs text-muted-foreground block mb-1">{lang === "pt" ? "Transporte" : "Transport"}</label>
+                    <select
+                      className="appearance-none w-full bg-input/30 text-foreground rounded-lg px-3 py-2 border border-border outline-none text-sm"
+                      value={mcpForm.transport}
+                      onChange={e => setMcpForm(prev => ({ ...prev, transport: e.target.value as "stdio" | "http" }))}>
+                      <option value="stdio" className="bg-card text-foreground">stdio ({lang === "pt" ? "local" : "local"})</option>
+                      <option value="http" className="bg-card text-foreground">HTTP ({lang === "pt" ? "remoto" : "remote"})</option>
+                    </select>
+                  </div>
+                  {mcpForm.transport === "stdio" && (
+                    <div>
+                      <label className="text-xs text-muted-foreground block mb-1">{lang === "pt" ? "Comando" : "Command"}</label>
+                      <input
+                        className="w-full rounded-lg px-3 py-2 border border-border bg-input/30 text-foreground text-sm outline-none font-mono"
+                        value={mcpForm.command}
+                        onChange={e => setMcpForm(prev => ({ ...prev, command: e.target.value }))}
+                        placeholder="python"
+                      />
+                    </div>
+                  )}
+                </div>
+                {mcpForm.transport === "http" ? (
+                  <div>
+                    <label className="text-xs text-muted-foreground block mb-1">URL</label>
+                    <input
+                      className="w-full rounded-lg px-3 py-2 border border-border bg-input/30 text-foreground text-sm outline-none font-mono"
+                      type="url"
+                      value={mcpForm.url}
+                      onChange={e => setMcpForm(prev => ({ ...prev, url: e.target.value }))}
+                      placeholder="http://localhost:3000/mcp"
+                    />
+                  </div>
+                ) : (
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-xs text-muted-foreground">{lang === "pt" ? "Argumentos (um por linha)" : "Arguments (one per line)"}</label>
+                      <button onClick={pickMcpFile} className="text-xs text-primary hover:text-primary/80 transition-colors">
+                        {lang === "pt" ? "Escolher ficheiro…" : "Pick file…"}
+                      </button>
+                    </div>
+                    <textarea
+                      className="w-full rounded-lg px-3 py-2 border border-border bg-input/30 text-foreground text-sm outline-none font-mono"
+                      rows={2}
+                      value={mcpForm.argsText}
+                      onChange={e => setMcpForm(prev => ({ ...prev, argsText: e.target.value }))}
+                      placeholder={"C:\\cad-mcp\\src\\server.py"}
+                    />
+                  </div>
+                )}
+                {mcpForm.transport === "stdio" && (
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-xs text-muted-foreground">{lang === "pt" ? "Pasta de trabalho (opcional)" : "Working directory (optional)"}</label>
+                      <button onClick={pickMcpCwd} className="text-xs text-primary hover:text-primary/80 transition-colors">
+                        {lang === "pt" ? "Escolher pasta…" : "Pick folder…"}
+                      </button>
+                    </div>
+                    <input
+                      className="w-full rounded-lg px-3 py-2 border border-border bg-input/30 text-foreground text-sm outline-none font-mono"
+                      value={mcpForm.cwd}
+                      onChange={e => setMcpForm(prev => ({ ...prev, cwd: e.target.value }))}
+                      placeholder={lang === "pt" ? "Deixa em branco a menos que o servidor precise (ex: CAD-MCP)" : "Leave blank unless the server needs it (e.g. CAD-MCP)"}
+                    />
+                  </div>
+                )}
+                <div>
+                  <label className="text-xs text-muted-foreground block mb-1">{lang === "pt" ? "Variáveis de ambiente (opcional, uma por linha: CHAVE=valor)" : "Environment variables (optional, one per line: KEY=value)"}</label>
+                  <textarea
+                    className="w-full rounded-lg px-3 py-2 border border-border bg-input/30 text-foreground text-sm outline-none font-mono"
+                    rows={2}
+                    value={mcpForm.envText}
+                    onChange={e => setMcpForm(prev => ({ ...prev, envText: e.target.value }))}
+                    placeholder="ACAD_PORT=5005"
+                  />
+                </div>
+                {mcpError && <p className="text-xs text-red-400">{mcpError}</p>}
+                <button
+                  onClick={saveMcpServer}
+                  disabled={mcpSaving}
+                  className="bg-primary text-primary-foreground rounded-full px-4 py-2 font-medium text-sm hover:opacity-90 disabled:opacity-50 transition-opacity">
+                  {mcpSaving ? t(lang, "adminSaving") : (lang === "pt" ? "Guardar servidor" : "Save server")}
+                </button>
+              </div>
+            )}
+
+            <div className="space-y-2">
+              {mcpServers.length === 0 && !mcpFormOpen && (
+                <p className="text-muted-foreground/60 text-xs">{lang === "pt" ? "Nenhum servidor MCP configurado." : "No MCP servers configured yet."}</p>
+              )}
+              {mcpServers.map(s => {
+                const test = mcpTestResult[s.id]
+                const statusColor = s.status === "connected" ? "text-green-400" : s.status === "error" ? "text-red-400" : "text-muted-foreground"
+                const statusLabel = s.status === "connected"
+                  ? (lang === "pt" ? "Ligado" : "Connected")
+                  : s.status === "error" ? (lang === "pt" ? "Erro" : "Error")
+                  : (lang === "pt" ? "Desligado" : "Disconnected")
+                return (
+                  <div key={s.id} className="border border-border rounded-lg p-3">
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
+                      <div>
+                        <span className="font-mono text-sm text-foreground">{s.id}</span>
+                        <span className={`ml-2 text-xs ${statusColor}`}>{statusLabel}{typeof s.toolCount === "number" ? ` · ${s.toolCount} tools` : ""}</span>
+                        {!s.enabled && <span className="ml-2 text-xs text-muted-foreground/60">({lang === "pt" ? "desativado" : "disabled"})</span>}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button onClick={() => testMcpServer(s.id)} disabled={mcpTesting === s.id}
+                          className="text-xs text-primary hover:text-primary/80 disabled:opacity-50 transition-colors">
+                          {mcpTesting === s.id ? "..." : (lang === "pt" ? "Testar" : "Test")}
+                        </button>
+                        <button onClick={() => toggleMcpServer(s)} className="text-xs text-muted-foreground hover:text-foreground transition-colors">
+                          {s.enabled ? (lang === "pt" ? "Desativar" : "Disable") : (lang === "pt" ? "Ativar" : "Enable")}
+                        </button>
+                        <button onClick={() => removeMcpServer(s.id)} className="text-xs text-muted-foreground hover:text-destructive transition-colors">
+                          {lang === "pt" ? "Remover" : "Remove"}
+                        </button>
+                      </div>
+                    </div>
+                    <p className="text-muted-foreground/70 text-xs mt-1 font-mono truncate">
+                      {s.transport === "http" ? s.url : `${s.command} ${s.args.join(" ")}`}
+                    </p>
+                    {s.cwd && (
+                      <p className="text-muted-foreground/50 text-xs mt-0.5 font-mono truncate">cwd: {s.cwd}</p>
+                    )}
+                    {test && (
+                      <p className={`text-xs mt-1 ${test.ok ? "text-green-400" : "text-red-400"}`}>
+                        {test.ok
+                          ? (lang === "pt" ? `OK — ${test.toolCount ?? 0} ferramentas encontradas` : `OK — ${test.toolCount ?? 0} tools found`)
+                          : test.error}
+                      </p>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          </div>
         </div>
       )}
 

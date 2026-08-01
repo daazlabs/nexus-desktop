@@ -34,6 +34,30 @@ const api = {
       ipcRenderer.invoke('nexus:connectors:setWordPressCredentials', siteUrl, username, appPassword),
     setN8nCredentials: (baseUrl: string, apiKey: string) =>
       ipcRenderer.invoke('nexus:connectors:setN8nCredentials', baseUrl, apiKey),
+    autocadStatus: () => ipcRenderer.invoke('nexus:connectors:autocad:status'),
+    autocadInstall: (
+      onProgress: (data: { step: string; pct: number }) => void,
+      onDone: (data: { ok: boolean; status?: unknown; error?: string }) => void,
+    ): (() => void) => {
+      const progressHandler = (_: any, data: { step: string; pct: number }) => onProgress(data)
+      const doneHandler = (_: any, data: { ok: boolean; status?: unknown; error?: string }) => {
+        cleanup(); onDone(data)
+      }
+      const cleanup = () => {
+        ipcRenderer.removeListener('nexus:connectors:autocad:progress', progressHandler)
+        ipcRenderer.removeListener('nexus:connectors:autocad:done', doneHandler)
+      }
+      ipcRenderer.on('nexus:connectors:autocad:progress', progressHandler)
+      ipcRenderer.on('nexus:connectors:autocad:done', doneHandler)
+      ipcRenderer.send('nexus:connectors:autocad:install')
+      return cleanup
+    },
+  },
+  mcp: {
+    list: () => ipcRenderer.invoke('nexus:mcp:list'),
+    upsert: (id: string, def: unknown) => ipcRenderer.invoke('nexus:mcp:upsert', id, def),
+    remove: (id: string) => ipcRenderer.invoke('nexus:mcp:remove', id),
+    test: (id: string) => ipcRenderer.invoke('nexus:mcp:test', id),
   },
   providers: {
     list: () => ipcRenderer.invoke('nexus:providers:list'),
@@ -103,6 +127,7 @@ const api = {
   },
   dialog: {
     openDir: (): Promise<string | null> => ipcRenderer.invoke('nexus:dialog:openDir'),
+    openFile: (): Promise<string | null> => ipcRenderer.invoke('nexus:dialog:openFile'),
   },
   app: {
     getVersion: (): Promise<string> => ipcRenderer.invoke('nexus:app:getVersion'),

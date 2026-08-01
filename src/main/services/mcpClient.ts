@@ -33,8 +33,9 @@ export async function connectStdio(
   command: string,
   args: string[],
   env?: Record<string, string>,
+  cwd?: string,
 ): Promise<McpConnection> {
-  const transport = new StdioClientTransport({ command, args, env })
+  const transport = new StdioClientTransport({ command, args, env, cwd })
   const client = new Client({ name: 'daaznexus-desktop', version: '1.0.0' })
   await client.connect(transport)
   return { serverId, client, lastUsed: Date.now() }

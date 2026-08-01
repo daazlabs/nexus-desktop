@@ -21,6 +21,7 @@
     "electron-updater": "^6.8.9",
     "exceljs": "^4.4.0",
     "execa": "^9.5.2",
+    "fix-path": "^5.0.0",
     "minimatch": "^10.2.5",
     "pptxgenjs": "^4.0.1"
   },

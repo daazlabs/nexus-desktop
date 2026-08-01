@@ -1,3 +1,4 @@
+import fixPath from 'fix-path'
 import { app, BrowserWindow, Menu, MenuItem } from 'electron'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -5,6 +6,15 @@ import { registerIpcHandlers } from './ipc/tools.js'
 import { initAutoUpdater } from './updater.js'
 import { initRemoteCatalog } from './services/remoteCatalog.js'
 import { startHealthChecker } from './services/healthChecker.js'
+import { closeAllConnections } from './services/mcpConnectors.js'
+
+// A macOS app launched from the Finder/Dock doesn't inherit the shell's PATH
+// (~/.zshrc etc.) — without this, MCP servers configured with a bare
+// command like "python" or "npx" fail with ENOENT even though the same
+// command works fine in a terminal. Must run before anything spawns a
+// process (MCP connectors connect lazily on first use, but this is cheap
+// and only needs to happen once, so do it as early as possible).
+fixPath()
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const ROOT = path.resolve(__dirname, '..', '..')
@@ -157,6 +167,10 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit()
   }
+})
+
+app.on('before-quit', () => {
+  closeAllConnections().catch((err) => console.error('[mcp] error closing connections on quit:', err))
 })
 
 } // gotLock

@@ -6,6 +6,8 @@ import { listProviders, getModelsByClass, getModelsByProvider, getProvider } fro
 import { resolveKey, saveSystemKey, deleteSystemKey, listVaultProviders } from '../services/keyVault.js'
 import { routeWithFallback, routeWithFallbackStream, getCooldownState } from '../services/fallbackChain.js'
 import * as mcpConnectors from '../services/mcpConnectors.js'
+import * as customMcpServers from '../services/customMcpServers.js'
+import type { CustomMcpServerConfig } from '../services/customMcpServers.js'
 import { maybeEnrichWithWeb } from '../services/webSearch.js'
 import * as skills from '../tools/skills.js'
 import type { ChatMessage } from '../services/providerClients.js'
@@ -328,6 +330,36 @@ export function registerIpcHandlers(): void {
     return mcpConnectors.listConnectors()
   })
 
+  // AutoCAD is a one-click connector, not token/OAuth-based: "install"
+  // provisions a private Python runtime the first time (download + pip
+  // install, streamed as progress events) and connects, then a plain
+  // re-click just reconnects (each provisioning step is skipped if already
+  // done — see autocadRuntime.ensureAutocadRuntime).
+  ipcMain.handle('nexus:connectors:autocad:status', () => mcpConnectors.getAutocadStatus())
+  ipcMain.on('nexus:connectors:autocad:install', async (event) => {
+    try {
+      const status = await mcpConnectors.installAutocad((step, pct) => {
+        event.sender.send('nexus:connectors:autocad:progress', { step, pct })
+      })
+      event.sender.send('nexus:connectors:autocad:done', { ok: true, status })
+    } catch (err: any) {
+      event.sender.send('nexus:connectors:autocad:done', { ok: false, error: err?.message || String(err) })
+    }
+  })
+
+  // Custom MCP servers (e.g. AutoCAD): user-configurable command+args
+  // servers, on top of the hardcoded first-party connectors above.
+  ipcMain.handle('nexus:mcp:list', () => customMcpServers.listServers())
+  ipcMain.handle('nexus:mcp:upsert', async (_event, id: string, def: CustomMcpServerConfig) => {
+    await customMcpServers.upsertServer(id, def)
+    return customMcpServers.listServers()
+  })
+  ipcMain.handle('nexus:mcp:remove', async (_event, id: string) => {
+    await customMcpServers.removeServer(id)
+    return customMcpServers.listServers()
+  })
+  ipcMain.handle('nexus:mcp:test', (_event, id: string) => customMcpServers.testServer(id))
+
   ipcMain.handle('nexus:providers:list', () => listProviders())
   ipcMain.handle('nexus:providers:modelsByClass', (_event, modelClass: string) => getModelsByClass(modelClass))
   ipcMain.handle('nexus:providers:modelsByProvider', (_event, providerId: string) => getModelsByProvider(providerId))
@@ -466,6 +498,18 @@ export function registerIpcHandlers(): void {
     const result = await dialog.showOpenDialog(win!, {
       properties: ['openDirectory', 'createDirectory'],
       title: 'Select project working directory',
+    })
+    return result.canceled ? null : result.filePaths[0]
+  })
+
+  // Used by the MCP servers panel in Settings to pick the entry-point
+  // script/executable for a custom server (e.g. an AutoCAD MCP server's
+  // server.py) without the user having to type an absolute path by hand.
+  ipcMain.handle('nexus:dialog:openFile', async (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender) ?? undefined
+    const result = await dialog.showOpenDialog(win!, {
+      properties: ['openFile'],
+      title: 'Select file',
     })
     return result.canceled ? null : result.filePaths[0]
   })
