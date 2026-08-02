@@ -19,9 +19,13 @@ export interface ChatResult {
 }
 
 const RETRY_STATUSES = new Set([429, 503, 502])
-const MAX_RETRIES = 0
-const BASE_DELAY = 1
-const MAX_RETRY_DELAY = 5
+// Backstop for a rate limit the local accounting in rateLimiter.ts could not
+// see coming (another app sharing the key, a per-hour or per-day cap). Kept
+// short on purpose: these retries sleep INSIDE the timeout race in
+// executeToolLoop, so the whole budget has to fit well under 30s.
+const MAX_RETRIES = 2
+const BASE_DELAY = 2
+const MAX_RETRY_DELAY = 8
 
 async function retryOnRateLimit<T>(fn: () => Promise<T>): Promise<T> {
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {

@@ -1,7 +1,7 @@
 import { getProvider, getModelsByClass, listAvailable } from './catalog.js'
 import { resolveKey } from './keyVault.js'
 import { getClient, type ChatMessage, type ChatResult } from './providerClients.js'
-import { checkAndRecord } from './rateLimiter.js'
+import { checkAndRecord, recordUsage, waitForBudget } from './rateLimiter.js'
 import { recordAttempt } from './analytics.js'
 import { isProviderDisabled } from './healthChecker.js'
 import { createExcel, createWord, createPowerpoint, createPdf } from '../tools/office.js'
@@ -99,6 +99,17 @@ function toolCallSignature(tc: any): string {
   return `${tc.function.name}(${JSON.stringify(args)})`
 }
 
+// Cheap stand-in for a tokenizer: only needs to be good enough to tell the
+// rate limiter "this next call is ~14k tokens, not ~200".
+function estimateTokens(messages: ChatMessage[]): number {
+  let chars = 0
+  for (const m of messages) {
+    if (typeof m.content === 'string') chars += m.content.length
+    if (m.toolCalls) chars += JSON.stringify(m.toolCalls).length
+  }
+  return Math.ceil(chars / 4)
+}
+
 async function executeToolLoop(
   client: any, apiKey: string, model: string,
   workingMsgs: ChatMessage[], maxTokens: number, tools?: any[],
@@ -110,10 +121,24 @@ async function executeToolLoop(
   firstCallTimeout: number = TIMEOUT,
 ): Promise<[ChatResult, ChatMessage[]]> {
   const seenCalls = seenCounts ?? new Map<string, number>()
-  let result = await Promise.race([
-    client.chat(apiKey, model, workingMsgs, { maxTokens, tools }),
-    new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`${model}: timeout after ${firstCallTimeout / 1000}s`)), firstCallTimeout)),
-  ])
+  const providerId = getProvider(model)?.id || ''
+
+  // Every iteration of this loop is a separate API request carrying the whole
+  // (growing) conversation, and on a tight free tier — Cerebras allows 5
+  // requests and 30k tokens a minute — a ten-step research task blows the
+  // quota within seconds. Pacing here, OUTSIDE the timeout race below, is
+  // what keeps the wait from being counted as a hang.
+  const paced = async (msgs: ChatMessage[], callTools: any[] | undefined, timeout: number, label: string): Promise<ChatResult> => {
+    if (providerId) await waitForBudget(providerId, estimateTokens(msgs), undefined, isCancelled)
+    const r: ChatResult = await Promise.race([
+      client.chat(apiKey, model, msgs, { maxTokens, tools: callTools }),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`${model}: timeout after ${timeout / 1000}s${label}`)), timeout)),
+    ])
+    if (providerId) recordUsage(providerId, r?.tokensUsed || 0)
+    return r
+  }
+
+  let result = await paced(workingMsgs, tools, firstCallTimeout, '')
 
   for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
     if (isCancelled?.()) break
@@ -146,18 +171,17 @@ async function executeToolLoop(
 
     workingMsgs = [
       ...workingMsgs,
-      ...toolCallsToMessages(result.toolCalls),
+      ...toolCallsToMessages(result.toolCalls || []),
       ...toolResultsToMessages(resultsList),
     ]
 
-    result = await Promise.race([
-      client.chat(apiKey, model, workingMsgs, { maxTokens, tools }),
-      new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`${model}: timeout after ${TIMEOUT / 1000}s (mid tool-loop, iteration ${iteration + 1})`)), TIMEOUT)),
-    ])
+    result = await paced(workingMsgs, tools, TIMEOUT, ` (mid tool-loop, iteration ${iteration + 1})`)
   }
 
   if (needsToolCall(result)) {
+    if (providerId) await waitForBudget(providerId, estimateTokens(workingMsgs), undefined, isCancelled)
     result = await client.chat(apiKey, model, workingMsgs, { maxTokens, tools: undefined })
+    if (providerId) recordUsage(providerId, result?.tokensUsed || 0)
   }
 
   return [result, workingMsgs]
@@ -711,11 +735,17 @@ export async function* routeWithFallbackStream(
             lastErrors.set(m, err?.message?.slice(0, 100) || String(err))
             continue
           } else {
-            // Reaches the user's chat as-is (finalize() shows it verbatim as
-            // "❌ <message>") — bare "timeout" or "HTTP 503" with no model
-            // name is undiagnosable, so always tag it if it isn't already.
+            // Content already reached the renderer. Throwing here makes
+            // finalize() replace the whole answer with "❌ <message>", so a
+            // long tool-driven run that dies on its last step loses every
+            // step before it. Append the failure to the partial answer and
+            // finish normally instead. Always tagged with the model — bare
+            // "timeout" or "HTTP 503" is undiagnosable.
             const msg: string = err?.message || String(err)
-            throw msg.startsWith(m) ? err : new Error(`${m}: ${msg}`)
+            recordAttempt(provider.id, m, false, totalTokens, msg.slice(0, 100))
+            yield `\n\n---\n⚠️ ${msg.startsWith(m) ? msg : `${m}: ${msg}`}\n(resposta interrompida — o texto acima é o que chegou a ser gerado)`
+            yield `__MODEL__:${m}`
+            return
           }
         }
       }
