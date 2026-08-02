@@ -7,6 +7,8 @@ import * as mcpClient from './mcpClient.js'
 import * as oauthFlow from './oauthFlow.js'
 import * as customMcpServers from './customMcpServers.js'
 import * as autocadRuntime from './autocadRuntime.js'
+import * as adobeRuntime from './adobeRuntime.js'
+import { PHOTOSHOP, PREMIERE, type AdobeAppConfig } from './adobeRuntime.js'
 import type { McpConnection } from './mcpClient.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -36,21 +38,23 @@ interface ConnectorDef {
   buildEnv?: (token: string) => Record<string, string>
 }
 
-// Google issues a "Desktop app" OAuth client separate from the backend's
-// "Web application" one (different redirect mechanism — loopback here vs a
-// fixed HTTPS URL there). Not a real secret for an installed app per
-// Google's own classification (PKCE is what actually protects the flow) —
-// but GitHub's push protection still flags it, and it's simplest to just
-// never commit it: read from an env var first, then from a local file in
-// the same user-data directory as the encryption vault key, never from
-// source. Whoever builds/packages the app places that file once, the same
-// way ENCRYPTION_KEY/.vault-key already works in keyVault.ts.
-function loadGoogleDesktopClient(): { clientId: string; clientSecret: string } {
-  if (process.env.GOOGLE_DESKTOP_CLIENT_ID) {
-    return { clientId: process.env.GOOGLE_DESKTOP_CLIENT_ID, clientSecret: process.env.GOOGLE_DESKTOP_CLIENT_SECRET || '' }
+// Each OAuth provider (Google, Canva, ...) issues a "Desktop app"-style
+// client separate from any web-backend client (different redirect mechanism
+// — loopback here vs a fixed HTTPS URL there). Not a real secret for an
+// installed app — PKCE is what actually protects the flow — but GitHub's
+// push protection still flags it, and it's simplest to just never commit it:
+// read from an env var first (`<PREFIX>_CLIENT_ID`/`_SECRET`), then from a
+// local file in the same user-data directory as the encryption vault key,
+// never from source. Whoever builds/packages the app places that file once,
+// the same way ENCRYPTION_KEY/.vault-key already works in keyVault.ts.
+function loadDesktopOAuthClient(providerId: string, envPrefix: string): { clientId: string; clientSecret: string } {
+  const idVar = `${envPrefix}_CLIENT_ID`
+  const secretVar = `${envPrefix}_CLIENT_SECRET`
+  if (process.env[idVar]) {
+    return { clientId: process.env[idVar]!, clientSecret: process.env[secretVar] || '' }
   }
   try {
-    const configPath = path.join(process.env.HOME || process.env.USERPROFILE || '.', '.daaznexus', 'google-desktop-client.json')
+    const configPath = path.join(process.env.HOME || process.env.USERPROFILE || '.', '.daaznexus', `${providerId}-desktop-client.json`)
     const raw = JSON.parse(fs.readFileSync(configPath, 'utf-8'))
     return { clientId: raw.client_id || '', clientSecret: raw.client_secret || '' }
   } catch {
@@ -58,15 +62,37 @@ function loadGoogleDesktopClient(): { clientId: string; clientSecret: string } {
   }
 }
 
-const { clientId: GOOGLE_DESKTOP_CLIENT_ID, clientSecret: GOOGLE_DESKTOP_CLIENT_SECRET } = loadGoogleDesktopClient()
+const { clientId: GOOGLE_DESKTOP_CLIENT_ID, clientSecret: GOOGLE_DESKTOP_CLIENT_SECRET } = loadDesktopOAuthClient('google', 'GOOGLE_DESKTOP')
+const { clientId: CANVA_CLIENT_ID, clientSecret: CANVA_CLIENT_SECRET } = loadDesktopOAuthClient('canva', 'CANVA')
 
-const OAUTH_PROVIDERS: Record<string, { authorizeUrl: string; tokenUrl: string; clientId: string; clientSecret?: string; extraAuthorizeParams?: Record<string, string> }> = {
+// Canva's OAuth server (unlike Google's "Desktop app" client type) validates
+// redirect_uri by exact match against what was registered via Dynamic Client
+// Registration (https://mcp.canva.com/register) — it doesn't exempt loopback
+// ports the way Google does. So this fixed port must match the redirect_uris
+// used at registration time (see mcp-servers docs / setup notes).
+const CANVA_REDIRECT_PORT = 53791
+
+const OAUTH_PROVIDERS: Record<string, { authorizeUrl: string; tokenUrl: string; clientId: string; clientSecret?: string; extraAuthorizeParams?: Record<string, string>; fixedPort?: number; clientAuthMethod?: 'body' | 'basic' }> = {
   google: {
     authorizeUrl: 'https://accounts.google.com/o/oauth2/v2/auth',
     tokenUrl: 'https://oauth2.googleapis.com/token',
     clientId: GOOGLE_DESKTOP_CLIENT_ID,
     clientSecret: GOOGLE_DESKTOP_CLIENT_SECRET,
     extraAuthorizeParams: { access_type: 'offline', prompt: 'consent' },
+  },
+  // Canva requires each user to authenticate individually — no org-level
+  // service account (see docs.canva.dev/docs/mcp/troubleshooting — "Canva
+  // doesn't support organization level authentication").
+  canva: {
+    authorizeUrl: 'https://mcp.canva.com/authorize',
+    tokenUrl: 'https://mcp.canva.com/token',
+    clientId: CANVA_CLIENT_ID,
+    clientSecret: CANVA_CLIENT_SECRET,
+    fixedPort: CANVA_REDIRECT_PORT,
+    // The DCR registration (mcp.canva.com/register) returns
+    // token_endpoint_auth_method: "client_secret_basic" — credentials go in
+    // an HTTP Basic header at the token endpoint, not as body fields.
+    clientAuthMethod: 'basic',
   },
 }
 
@@ -83,6 +109,7 @@ const CONNECTOR_SCOPES: Record<string, string[]> = {
 const CONNECTOR_PROVIDER: Record<string, string> = {
   gdrive: 'google',
   gmail: 'google',
+  canva: 'canva',
 }
 
 // Phase 1 wired up GitHub (remote MCP server, PAT auth, zero subprocesses).
@@ -97,6 +124,18 @@ const CONNECTOR_DEFS: Record<string, ConnectorDef> = {
     transport: 'streamable_http',
     authMethod: 'pat',
     url: 'https://api.githubcopilot.com/mcp/',
+    buildHeaders: (token) => ({ Authorization: `Bearer ${token}` }),
+  },
+  // Canva's official remote MCP server (docs.canva.dev/docs/mcp) — same
+  // transport shape as GitHub, but OAuth instead of a plain PAT. Client
+  // registered via Dynamic Client Registration (mcp.canva.com/register),
+  // not the waitlist-gated CIMD path — see OAUTH_PROVIDERS.canva above.
+  canva: {
+    id: 'canva',
+    name: 'Canva',
+    transport: 'streamable_http',
+    authMethod: 'oauth',
+    url: 'https://mcp.canva.com/mcp',
     buildHeaders: (token) => ({ Authorization: `Bearer ${token}` }),
   },
   gdrive: {
@@ -145,6 +184,19 @@ const CONNECTOR_DEFS: Record<string, ConnectorDef> = {
       const blob = JSON.parse(token)
       return { N8N_BASE_URL: blob.base_url, N8N_API_KEY: blob.api_key }
     },
+  },
+  // Magnific/Freepik: a single API key (freepik.com/api), fixed endpoint —
+  // simplest auth shape of any connector here, same as GitHub's plain PAT.
+  // No vendored code: the only community MCP for this API ships with no
+  // LICENSE file, so mcp-servers/magnific-server is written fresh against
+  // Magnific's public OpenAPI spec instead of being adapted from it.
+  magnific: {
+    id: 'magnific',
+    name: 'Magnific',
+    transport: 'stdio',
+    authMethod: 'pat',
+    command: nodeServer('magnific-server'),
+    buildEnv: (token) => ({ MAGNIFIC_API_KEY: token }),
   },
 }
 
@@ -205,7 +257,7 @@ export async function connectOAuth(connectorId: string): Promise<ConnectorState[
   if (!def || def.authMethod !== 'oauth') throw new Error(`Connector '${connectorId}' does not use OAuth`)
   const providerId = CONNECTOR_PROVIDER[connectorId]
   const provider = OAUTH_PROVIDERS[providerId]
-  if (!provider?.clientId) throw new Error(`Connector '${connectorId}' is not configured (missing Google Desktop Client ID)`)
+  if (!provider?.clientId) throw new Error(`Connector '${connectorId}' is not configured (missing ${providerId} Desktop Client ID)`)
 
   const token = await oauthFlow.runPkceFlow({
     authorizeUrl: provider.authorizeUrl,
@@ -214,6 +266,7 @@ export async function connectOAuth(connectorId: string): Promise<ConnectorState[
     clientSecret: provider.clientSecret,
     scopes: CONNECTOR_SCOPES[connectorId] || [],
     extraAuthorizeParams: provider.extraAuthorizeParams,
+    fixedPort: provider.fixedPort,
   })
   saveSystemKey(vaultKey(connectorId), JSON.stringify(token))
   return listConnectors()
@@ -244,6 +297,176 @@ export async function installAutocad(onProgress?: (step: string, pct: number) =>
   const conn = await getAutocadConnection()
   if (!conn) throw new Error('Não foi possível ligar ao AutoCAD. Confirma que o AutoCAD está aberto e tenta novamente.')
   return getAutocadStatus()
+}
+
+export interface AdobeConnectorStatus {
+  supported: boolean
+  provisioned: boolean
+  proxyRunning: boolean
+  mcpConnected: boolean
+  pluginConnected: boolean
+  // Alias of pluginConnected — keeps the same shape as AutocadStatus.connected
+  // so the generic "Desligar" button/UI condition can be reused as-is.
+  connected: boolean
+}
+// Kept for backwards-compat call sites; identical shape.
+export type PhotoshopStatus = AdobeConnectorStatus
+
+// One adb-proxy-socket process/port (3001) serves every Adobe app at once
+// (see mcp-servers/adobe-server/NOTICE.md) — so "is the proxy running" is
+// genuinely shared state, not per-app, unlike pluginConnected which really
+// is per-app (each app's own plugin registers with the proxy separately).
+let adobeProxyRunning = false
+
+const ADOBE_APPS: AdobeAppConfig[] = [PHOTOSHOP, PREMIERE]
+
+interface AdobePluginPingState {
+  connected: boolean
+  timer: ReturnType<typeof setInterval> | null
+  inFlight: boolean
+}
+const adobePingState = new Map<string, AdobePluginPingState>()
+function pingState(appId: string): AdobePluginPingState {
+  let s = adobePingState.get(appId)
+  if (!s) {
+    s = { connected: false, timer: null, inFlight: false }
+    adobePingState.set(appId, s)
+  }
+  return s
+}
+
+function getAdobeStatus(appCfg: AdobeAppConfig): AdobeConnectorStatus {
+  const pluginConnected = pingState(appCfg.id).connected
+  return {
+    supported: adobeRuntime.isSupportedPlatform(),
+    provisioned: adobeRuntime.isProvisioned(),
+    proxyRunning: adobeProxyRunning,
+    mcpConnected: connections.has(appCfg.id),
+    pluginConnected,
+    connected: pluginConnected,
+  }
+}
+
+// mcpClient.callTool never throws for an application-level error from the
+// MCP server itself (FastMCP wraps Python exceptions into isError:true,
+// surfaced as a "Error: ..." string — see mcpClient.ts callTool). It only
+// throws if the stdio transport/process itself dies. socket_client.py always
+// raises the *same* wording on a proxy round-trip timeout regardless of which
+// tool was called (see mcp-servers/adobe-server/mcp/socket_client.py) — any
+// other response, success or application error, means the plugin answered,
+// i.e. is connected inside the app.
+async function pingAdobePlugin(appCfg: AdobeAppConfig, conn: McpConnection): Promise<boolean> {
+  const result = await mcpClient.callTool(conn, appCfg.pingTool, {})
+  return !/Connection Timed Out|command proxy server/i.test(result)
+}
+
+function stopAdobePluginPing(appCfg: AdobeAppConfig): void {
+  const s = pingState(appCfg.id)
+  if (s.timer) clearInterval(s.timer)
+  s.timer = null
+}
+
+// Polls every 3s while the wizard is waiting for the user to click "Connect"
+// inside the app's plugin panel — a failed ping takes ~20s (the proxy's own
+// timeout), so `inFlight` guards against stacking calls. Self-stops the
+// moment a connection is detected.
+function startAdobePluginPing(appCfg: AdobeAppConfig, conn: McpConnection): void {
+  stopAdobePluginPing(appCfg)
+  const s = pingState(appCfg.id)
+  s.timer = setInterval(async () => {
+    if (s.inFlight) return
+    s.inFlight = true
+    try {
+      const ok = await pingAdobePlugin(appCfg, conn)
+      if (ok) {
+        s.connected = true
+        stopAdobePluginPing(appCfg)
+      }
+    } catch {
+      /* transport died — next getConnection() call will notice and reconnect */
+    } finally {
+      s.inFlight = false
+    }
+  }, 3000)
+}
+
+// Not in CONNECTOR_DEFS for the same reason AutoCAD isn't: no vault
+// credential, the "connection" is a self-provisioned local runtime whose
+// command/args/cwd are only known once adobeRuntime has provisioned it.
+async function getAdobeConnection(appCfg: AdobeAppConfig): Promise<McpConnection | null> {
+  const existing = connections.get(appCfg.id)
+  if (existing) return existing
+  if (!adobeRuntime.isProvisioned()) return null
+  try {
+    const target = await adobeRuntime.ensureAdobeRuntime(appCfg)
+    const conn = await mcpClient.connectStdio(appCfg.id, target.command, target.args, target.env, target.cwd)
+    connections.set(appCfg.id, conn)
+    return conn
+  } catch (e) {
+    console.warn(`[mcp] failed to connect '${appCfg.id}':`, e)
+    return null
+  }
+}
+
+// Drives the one-click "Ligar <App>" button: provisions uv + the shared
+// proxy binary + the vendored MCP source and starts the proxy (a no-op if
+// another Adobe app already started it — see adobeRuntime.ensureProxyRunning),
+// connects the MCP server, downloads and opens the .ccx plugin installer
+// (best-effort — never throws, see adobeRuntime.openPluginInstaller), then
+// starts polling for the user's manual "Connect" click inside the app.
+async function installAdobeApp(
+  appCfg: AdobeAppConfig,
+  onProgress?: (step: string, pct: number) => void,
+): Promise<AdobeConnectorStatus> {
+  await adobeRuntime.ensureAdobeRuntime(appCfg, onProgress)
+  adobeProxyRunning = true
+  connections.delete(appCfg.id)
+  const conn = await getAdobeConnection(appCfg)
+  if (!conn) throw new Error(`Não foi possível preparar o servidor MCP do ${appCfg.displayName}.`)
+  await adobeRuntime.openPluginInstaller(appCfg)
+  onProgress?.('A aguardar ligação do plugin...', 100)
+  startAdobePluginPing(appCfg, conn)
+  return getAdobeStatus(appCfg)
+}
+
+// Only tears down the shared proxy process once no other Adobe app is still
+// using it — Photoshop and Premiere register with the same proxy/port, so
+// disconnecting one must not kill the other's connection.
+async function disconnectAdobeApp(appCfg: AdobeAppConfig): Promise<void> {
+  stopAdobePluginPing(appCfg)
+  await disconnectConnector(appCfg.id)
+  pingState(appCfg.id).connected = false
+  const stillInUse = ADOBE_APPS.some((a) => a.id !== appCfg.id && connections.has(a.id))
+  if (!stillInUse) {
+    adobeRuntime.stopProxy()
+    adobeProxyRunning = false
+  }
+}
+
+export function getPhotoshopStatus(): AdobeConnectorStatus {
+  return getAdobeStatus(PHOTOSHOP)
+}
+export function installPhotoshop(onProgress?: (step: string, pct: number) => void): Promise<AdobeConnectorStatus> {
+  return installAdobeApp(PHOTOSHOP, onProgress)
+}
+export function disconnectPhotoshop(): Promise<void> {
+  return disconnectAdobeApp(PHOTOSHOP)
+}
+export function showPhotoshopInstallerInFolder(): void {
+  adobeRuntime.showPluginInstallerInFolder(PHOTOSHOP)
+}
+
+export function getPremiereStatus(): AdobeConnectorStatus {
+  return getAdobeStatus(PREMIERE)
+}
+export function installPremiere(onProgress?: (step: string, pct: number) => void): Promise<AdobeConnectorStatus> {
+  return installAdobeApp(PREMIERE, onProgress)
+}
+export function disconnectPremiere(): Promise<void> {
+  return disconnectAdobeApp(PREMIERE)
+}
+export function showPremiereInstallerInFolder(): void {
+  adobeRuntime.showPluginInstallerInFolder(PREMIERE)
 }
 
 export async function disconnectConnector(connectorId: string): Promise<void> {
@@ -286,7 +509,7 @@ async function resolveAccessToken(connectorId: string, def: ConnectorDef): Promi
   const providerId = CONNECTOR_PROVIDER[connectorId]
   const provider = OAUTH_PROVIDERS[providerId]
   try {
-    const refreshed = await oauthFlow.refreshAccessToken(provider.tokenUrl, provider.clientId, provider.clientSecret, blob.refresh_token)
+    const refreshed = await oauthFlow.refreshAccessToken(provider.tokenUrl, provider.clientId, provider.clientSecret, blob.refresh_token, provider.clientAuthMethod)
     blob.access_token = refreshed.access_token
     blob.expires_at = refreshed.expires_at
     saveSystemKey(vaultKey(connectorId), JSON.stringify(blob))
@@ -323,12 +546,14 @@ async function getConnection(connectorId: string): Promise<McpConnection | null>
   if (existing) return existing
 
   if (connectorId === 'autocad') return getAutocadConnection()
+  const adobeApp = ADOBE_APPS.find((a) => a.id === connectorId)
+  if (adobeApp) return getAdobeConnection(adobeApp)
 
   const def = CONNECTOR_DEFS[connectorId]
   // Not one of the hardcoded first-party connectors (GitHub/Drive/Gmail/
-  // WordPress/n8n/AutoCAD) — fall through to the user-defined servers
-  // registry (custom MCP servers the user configured by hand), which owns
-  // its own connection cache and reconnection logic.
+  // WordPress/n8n/AutoCAD/Adobe apps) — fall through to the user-defined
+  // servers registry (custom MCP servers the user configured by hand), which
+  // owns its own connection cache and reconnection logic.
   if (!def) return customMcpServers.getConnection(connectorId)
   const token = await resolveAccessToken(connectorId, def)
   if (!token) return null
@@ -398,6 +623,31 @@ export async function listOpenAiToolsForConnectors(): Promise<any[]> {
       }
     }
   }
+  // Gated on pingState(id).connected rather than adobeRuntime.isProvisioned()
+  // (unlike AutoCAD) — exposing an app's tools before its plugin is actually
+  // connected would mean any LLM call blocks for the full ~20s proxy timeout
+  // before failing. Bad UX in the middle of a chat.
+  for (const appCfg of ADOBE_APPS) {
+    if (!pingState(appCfg.id).connected) continue
+    const conn = await getAdobeConnection(appCfg)
+    if (!conn) continue
+    try {
+      const mcpTools = await mcpClient.listTools(conn)
+      for (const t of mcpTools) tools.push(mcpClient.mcpToolToOpenai(appCfg.id, t))
+    } catch (e) {
+      console.warn(`[mcp] listTools failed for '${appCfg.id}', reconnecting:`, e)
+      connections.delete(appCfg.id)
+      const fresh = await getAdobeConnection(appCfg)
+      if (fresh) {
+        try {
+          const mcpTools = await mcpClient.listTools(fresh)
+          for (const t of mcpTools) tools.push(mcpClient.mcpToolToOpenai(appCfg.id, t))
+        } catch (e2) {
+          console.warn(`[mcp] listTools retry failed for '${appCfg.id}':`, e2)
+        }
+      }
+    }
+  }
   tools.push(...(await customMcpServers.listOpenAiTools()))
   return tools
 }
@@ -448,5 +698,7 @@ export async function closeAllConnections(): Promise<void> {
     }
   }
   connections.clear()
+  for (const appCfg of ADOBE_APPS) stopAdobePluginPing(appCfg)
+  adobeRuntime.stopProxy()
   await customMcpServers.closeAll()
 }

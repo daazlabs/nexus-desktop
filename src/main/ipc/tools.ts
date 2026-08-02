@@ -347,6 +347,51 @@ export function registerIpcHandlers(): void {
     }
   })
 
+  // Photoshop, like AutoCAD, is a one-click connector — but "install" also
+  // opens the plugin's .ccx installer and starts polling for the user's
+  // manual "Connect" click inside Photoshop (see mcpConnectors.installPhotoshop).
+  // A dedicated disconnect handler (rather than reusing
+  // nexus:connectors:disconnect) is needed to also stop that polling and
+  // kill the proxy subprocess.
+  ipcMain.handle('nexus:connectors:photoshop:status', () => mcpConnectors.getPhotoshopStatus())
+  ipcMain.on('nexus:connectors:photoshop:install', async (event) => {
+    try {
+      const status = await mcpConnectors.installPhotoshop((step, pct) => {
+        event.sender.send('nexus:connectors:photoshop:progress', { step, pct })
+      })
+      event.sender.send('nexus:connectors:photoshop:done', { ok: true, status })
+    } catch (err: any) {
+      event.sender.send('nexus:connectors:photoshop:done', { ok: false, error: err?.message || String(err) })
+    }
+  })
+  ipcMain.handle('nexus:connectors:photoshop:disconnect', async () => {
+    await mcpConnectors.disconnectPhotoshop()
+    return mcpConnectors.getPhotoshopStatus()
+  })
+  ipcMain.handle('nexus:connectors:photoshop:showInstaller', () => {
+    mcpConnectors.showPhotoshopInstallerInFolder()
+  })
+
+  // Same pattern as Photoshop above — see mcpConnectors.installAdobeApp.
+  ipcMain.handle('nexus:connectors:premiere:status', () => mcpConnectors.getPremiereStatus())
+  ipcMain.on('nexus:connectors:premiere:install', async (event) => {
+    try {
+      const status = await mcpConnectors.installPremiere((step, pct) => {
+        event.sender.send('nexus:connectors:premiere:progress', { step, pct })
+      })
+      event.sender.send('nexus:connectors:premiere:done', { ok: true, status })
+    } catch (err: any) {
+      event.sender.send('nexus:connectors:premiere:done', { ok: false, error: err?.message || String(err) })
+    }
+  })
+  ipcMain.handle('nexus:connectors:premiere:disconnect', async () => {
+    await mcpConnectors.disconnectPremiere()
+    return mcpConnectors.getPremiereStatus()
+  })
+  ipcMain.handle('nexus:connectors:premiere:showInstaller', () => {
+    mcpConnectors.showPremiereInstallerInFolder()
+  })
+
   // Custom MCP servers (e.g. AutoCAD): user-configurable command+args
   // servers, on top of the hardcoded first-party connectors above.
   ipcMain.handle('nexus:mcp:list', () => customMcpServers.listServers())

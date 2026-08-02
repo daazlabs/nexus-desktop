@@ -19,6 +19,7 @@ const SETTINGS_TABS: { key: SettingsTab; label: string; color: string }[] = [
 // to figure out which checkboxes to tick on GitHub's own page.
 const CONNECTOR_HELP_URLS: Record<string, string> = {
   github: "https://github.com/settings/tokens/new?description=DaazNexus&scopes=repo",
+  magnific: "https://freepik.com/api",
 }
 
 const PROVIDER_COLORS: Record<string, string> = {
@@ -71,9 +72,29 @@ export default function SettingsPage({ lang, themeColor, setThemeColor, onNaviga
   const [autocadProgress, setAutocadProgress] = useState<{ step: string; pct: number } | null>(null)
   const [autocadError, setAutocadError] = useState<string | null>(null)
 
+  const [photoshopStatus, setPhotoshopStatus] = useState<{
+    supported: boolean; provisioned: boolean; proxyRunning: boolean
+    mcpConnected: boolean; pluginConnected: boolean; connected: boolean
+  } | null>(null)
+  const [photoshopInstalling, setPhotoshopInstalling] = useState(false)
+  const [photoshopProgress, setPhotoshopProgress] = useState<{ step: string; pct: number } | null>(null)
+  const [photoshopError, setPhotoshopError] = useState<string | null>(null)
+  const [photoshopDisconnecting, setPhotoshopDisconnecting] = useState(false)
+
+  const [premiereStatus, setPremiereStatus] = useState<{
+    supported: boolean; provisioned: boolean; proxyRunning: boolean
+    mcpConnected: boolean; pluginConnected: boolean; connected: boolean
+  } | null>(null)
+  const [premiereInstalling, setPremiereInstalling] = useState(false)
+  const [premiereProgress, setPremiereProgress] = useState<{ step: string; pct: number } | null>(null)
+  const [premiereError, setPremiereError] = useState<string | null>(null)
+  const [premiereDisconnecting, setPremiereDisconnecting] = useState(false)
+
   const loadConnectors = () => api.listConnectors().then(setConnectors).catch(() => {})
   const loadMcpServers = () => api.listMcpServers().then(setMcpServers).catch(() => {})
   const loadAutocadStatus = () => api.getAutocadStatus().then(setAutocadStatus).catch(() => {})
+  const loadPhotoshopStatus = () => api.getPhotoshopStatus().then(setPhotoshopStatus).catch(() => {})
+  const loadPremiereStatus = () => api.getPremiereStatus().then(setPremiereStatus).catch(() => {})
 
   useEffect(() => {
     api.getProvidersCategorized().then(setCategorized).catch(() => {})
@@ -83,7 +104,30 @@ export default function SettingsPage({ lang, themeColor, setThemeColor, onNaviga
     loadConnectors()
     loadMcpServers()
     loadAutocadStatus()
+    loadPhotoshopStatus()
+    loadPremiereStatus()
   }, [])
+
+  // Auto-detects the manual "Connect" click inside the Photoshop/Premiere
+  // plugin panel — polls the cheap status handle only while everything else
+  // is ready and we're actually waiting on that one remaining manual step.
+  useEffect(() => {
+    const awaitingPlugin =
+      photoshopStatus?.provisioned && photoshopStatus?.proxyRunning &&
+      photoshopStatus?.mcpConnected && !photoshopStatus?.pluginConnected
+    if (!awaitingPlugin) return
+    const id = setInterval(loadPhotoshopStatus, 2500)
+    return () => clearInterval(id)
+  }, [photoshopStatus])
+
+  useEffect(() => {
+    const awaitingPlugin =
+      premiereStatus?.provisioned && premiereStatus?.proxyRunning &&
+      premiereStatus?.mcpConnected && !premiereStatus?.pluginConnected
+    if (!awaitingPlugin) return
+    const id = setInterval(loadPremiereStatus, 2500)
+    return () => clearInterval(id)
+  }, [premiereStatus])
 
   useEffect(() => {
     if (!categorized) return
@@ -208,6 +252,56 @@ export default function SettingsPage({ lang, themeColor, setThemeColor, onNaviga
         await loadAutocadStatus()
       },
     )
+  }
+
+  const installPhotoshop = () => {
+    setPhotoshopInstalling(true)
+    setPhotoshopError(null)
+    setPhotoshopProgress({ step: lang === "pt" ? "A começar…" : "Starting…", pct: 0 })
+    api.installPhotoshop(
+      (p) => setPhotoshopProgress(p),
+      async (res) => {
+        setPhotoshopInstalling(false)
+        setPhotoshopProgress(null)
+        if (!res.ok) setPhotoshopError(res.error || (lang === "pt" ? "Erro desconhecido." : "Unknown error."))
+        await loadPhotoshopStatus()
+      },
+    )
+  }
+
+  const disconnectPhotoshop = async () => {
+    setPhotoshopDisconnecting(true)
+    try {
+      await api.disconnectPhotoshop()
+      await loadPhotoshopStatus()
+    } finally {
+      setPhotoshopDisconnecting(false)
+    }
+  }
+
+  const installPremiere = () => {
+    setPremiereInstalling(true)
+    setPremiereError(null)
+    setPremiereProgress({ step: lang === "pt" ? "A começar…" : "Starting…", pct: 0 })
+    api.installPremiere(
+      (p) => setPremiereProgress(p),
+      async (res) => {
+        setPremiereInstalling(false)
+        setPremiereProgress(null)
+        if (!res.ok) setPremiereError(res.error || (lang === "pt" ? "Erro desconhecido." : "Unknown error."))
+        await loadPremiereStatus()
+      },
+    )
+  }
+
+  const disconnectPremiere = async () => {
+    setPremiereDisconnecting(true)
+    try {
+      await api.disconnectPremiere()
+      await loadPremiereStatus()
+    } finally {
+      setPremiereDisconnecting(false)
+    }
   }
 
   const parseArgs = (text: string): string[] => text.split("\n").map(l => l.trim()).filter(Boolean)
@@ -424,15 +518,15 @@ export default function SettingsPage({ lang, themeColor, setThemeColor, onNaviga
                   !c.available ? (
                     <p className="text-xs text-muted-foreground">
                       {lang === "pt"
-                        ? "Ainda não configurado (falta o Google Desktop Client ID)."
-                        : "Not configured yet (missing Google Desktop Client ID)."}
+                        ? `Ainda não configurado (falta o Desktop Client ID de ${c.name}).`
+                        : `Not configured yet (missing ${c.name} Desktop Client ID).`}
                     </p>
                   ) : (
                     <button
                       onClick={() => connectOAuth(c.id)}
                       disabled={connectorSaving === c.id}
                       className="bg-primary text-primary-foreground rounded-full px-4 py-2 font-medium text-sm hover:opacity-90 disabled:opacity-50 transition-opacity">
-                      {lang === "pt" ? "Ligar com Google" : "Connect with Google"}
+                      {lang === "pt" ? `Ligar com ${c.name}` : `Connect with ${c.name}`}
                     </button>
                   )
                 ) : (
@@ -442,7 +536,7 @@ export default function SettingsPage({ lang, themeColor, setThemeColor, onNaviga
                         <label className="text-xs text-muted-foreground">{lang === "pt" ? "Personal Access Token" : "Personal Access Token"}</label>
                         <a href={CONNECTOR_HELP_URLS[c.id]} target="_blank" rel="noopener noreferrer"
                           className="inline-flex items-center gap-1 text-primary hover:text-primary/80 text-xs transition-colors">
-                          {lang === "pt" ? "Criar token no GitHub" : "Create token on GitHub"} ↗
+                          {lang === "pt" ? `Criar token em ${c.name}` : `Create token on ${c.name}`} ↗
                         </a>
                       </div>
                     )}
@@ -509,6 +603,152 @@ export default function SettingsPage({ lang, themeColor, setThemeColor, onNaviga
                   </div>
                 )}
                 {autocadError && <p className="text-xs text-red-400">{autocadError}</p>}
+              </div>
+            )}
+          </div>
+
+          <div className={`bg-card border rounded-xl p-4 transition-colors ${photoshopStatus?.connected ? "border-green-700/40 border-l-4 border-l-green-500" : "border-border"}`}>
+            <div className="flex items-center justify-between mb-3">
+              <span className="font-medium text-sm text-foreground">Photoshop</span>
+              {photoshopStatus?.connected
+                ? <span className="inline-flex items-center gap-1 bg-green-500/15 text-green-400 border border-green-500/30 rounded-full px-2.5 py-0.5 text-xs font-medium">{lang === "pt" ? "Ligado" : "Connected"}</span>
+                : <span className="text-xs text-muted-foreground">{lang === "pt" ? "Desligado" : "Disconnected"}</span>}
+            </div>
+            {!photoshopStatus?.supported ? (
+              <p className="text-xs text-muted-foreground">
+                {lang === "pt"
+                  ? "Só disponível no macOS e Windows (64-bit)."
+                  : "macOS and Windows (64-bit) only."}
+              </p>
+            ) : photoshopStatus?.connected ? (
+              <button
+                onClick={disconnectPhotoshop}
+                disabled={photoshopDisconnecting}
+                className="text-xs text-muted-foreground hover:text-destructive transition-colors disabled:opacity-50">
+                {lang === "pt" ? "Desligar" : "Disconnect"}
+              </button>
+            ) : photoshopInstalling ? (
+              <div className="space-y-2">
+                <button
+                  disabled
+                  className="bg-primary text-primary-foreground rounded-full px-4 py-2 font-medium text-sm opacity-50">
+                  {lang === "pt" ? "A ligar…" : "Connecting…"}
+                </button>
+                {photoshopProgress && (
+                  <div className="space-y-1">
+                    <div className="h-1.5 bg-border rounded-full overflow-hidden">
+                      <div className="h-full bg-primary transition-all" style={{ width: `${photoshopProgress.pct}%` }} />
+                    </div>
+                    <p className="text-xs text-muted-foreground">{photoshopProgress.step}</p>
+                  </div>
+                )}
+                {photoshopError && <p className="text-xs text-red-400">{photoshopError}</p>}
+              </div>
+            ) : photoshopStatus?.provisioned && photoshopStatus?.proxyRunning && photoshopStatus?.mcpConnected ? (
+              <div className="space-y-2">
+                <p className="text-xs text-muted-foreground leading-relaxed">
+                  {lang === "pt"
+                    ? "✓ Photoshop MCP pronto. Abre o Photoshop → menu Plugins → Photoshop MCP Agent → clica Connect no painel."
+                    : "✓ Photoshop MCP ready. Open Photoshop → Plugins menu → Photoshop MCP Agent → click Connect in the panel."}
+                </p>
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <span className="inline-block h-2 w-2 rounded-full bg-amber-400 animate-pulse" />
+                  {lang === "pt" ? "A verificar a ligação…" : "Checking connection…"}
+                </div>
+                <button
+                  onClick={() => api.showPhotoshopInstaller()}
+                  className="text-xs text-muted-foreground underline hover:text-foreground transition-colors">
+                  {lang === "pt" ? "Não abriu o instalador do plugin? Mostra o ficheiro" : "Plugin installer didn't open? Show the file"}
+                </button>
+                {photoshopError && <p className="text-xs text-red-400">{photoshopError}</p>}
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <p className="text-xs text-muted-foreground leading-relaxed">
+                  {lang === "pt"
+                    ? "A app prepara tudo sozinha (Python, proxy). No fim abre-se o instalador do plugin — só falta abrir o Photoshop e clicar Connect no painel; detectamos a ligação automaticamente."
+                    : "The app sets everything up on its own (Python, proxy). At the end the plugin installer opens — just open Photoshop and click Connect in the panel; we detect the connection automatically."}
+                </p>
+                <button
+                  onClick={installPhotoshop}
+                  disabled={photoshopInstalling}
+                  className="bg-primary text-primary-foreground rounded-full px-4 py-2 font-medium text-sm hover:opacity-90 disabled:opacity-50 transition-opacity">
+                  {lang === "pt" ? "Ligar Photoshop" : "Connect Photoshop"}
+                </button>
+                {photoshopError && <p className="text-xs text-red-400">{photoshopError}</p>}
+              </div>
+            )}
+          </div>
+
+          <div className={`bg-card border rounded-xl p-4 transition-colors ${premiereStatus?.connected ? "border-green-700/40 border-l-4 border-l-green-500" : "border-border"}`}>
+            <div className="flex items-center justify-between mb-3">
+              <span className="font-medium text-sm text-foreground">Premiere Pro</span>
+              {premiereStatus?.connected
+                ? <span className="inline-flex items-center gap-1 bg-green-500/15 text-green-400 border border-green-500/30 rounded-full px-2.5 py-0.5 text-xs font-medium">{lang === "pt" ? "Ligado" : "Connected"}</span>
+                : <span className="text-xs text-muted-foreground">{lang === "pt" ? "Desligado" : "Disconnected"}</span>}
+            </div>
+            {!premiereStatus?.supported ? (
+              <p className="text-xs text-muted-foreground">
+                {lang === "pt"
+                  ? "Só disponível no macOS e Windows (64-bit)."
+                  : "macOS and Windows (64-bit) only."}
+              </p>
+            ) : premiereStatus?.connected ? (
+              <button
+                onClick={disconnectPremiere}
+                disabled={premiereDisconnecting}
+                className="text-xs text-muted-foreground hover:text-destructive transition-colors disabled:opacity-50">
+                {lang === "pt" ? "Desligar" : "Disconnect"}
+              </button>
+            ) : premiereInstalling ? (
+              <div className="space-y-2">
+                <button
+                  disabled
+                  className="bg-primary text-primary-foreground rounded-full px-4 py-2 font-medium text-sm opacity-50">
+                  {lang === "pt" ? "A ligar…" : "Connecting…"}
+                </button>
+                {premiereProgress && (
+                  <div className="space-y-1">
+                    <div className="h-1.5 bg-border rounded-full overflow-hidden">
+                      <div className="h-full bg-primary transition-all" style={{ width: `${premiereProgress.pct}%` }} />
+                    </div>
+                    <p className="text-xs text-muted-foreground">{premiereProgress.step}</p>
+                  </div>
+                )}
+                {premiereError && <p className="text-xs text-red-400">{premiereError}</p>}
+              </div>
+            ) : premiereStatus?.provisioned && premiereStatus?.proxyRunning && premiereStatus?.mcpConnected ? (
+              <div className="space-y-2">
+                <p className="text-xs text-muted-foreground leading-relaxed">
+                  {lang === "pt"
+                    ? "✓ Premiere MCP pronto. Abre o Premiere → menu Window → UXP Plugins → Premiere MCP Agent → clica Connect no painel."
+                    : "✓ Premiere MCP ready. Open Premiere → Window menu → UXP Plugins → Premiere MCP Agent → click Connect in the panel."}
+                </p>
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <span className="inline-block h-2 w-2 rounded-full bg-amber-400 animate-pulse" />
+                  {lang === "pt" ? "A verificar a ligação…" : "Checking connection…"}
+                </div>
+                <button
+                  onClick={() => api.showPremiereInstaller()}
+                  className="text-xs text-muted-foreground underline hover:text-foreground transition-colors">
+                  {lang === "pt" ? "Não abriu o instalador do plugin? Mostra o ficheiro" : "Plugin installer didn't open? Show the file"}
+                </button>
+                {premiereError && <p className="text-xs text-red-400">{premiereError}</p>}
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <p className="text-xs text-muted-foreground leading-relaxed">
+                  {lang === "pt"
+                    ? "A app prepara tudo sozinha (Python, proxy). No fim abre-se o instalador do plugin — só falta abrir o Premiere e clicar Connect no painel; detectamos a ligação automaticamente."
+                    : "The app sets everything up on its own (Python, proxy). At the end the plugin installer opens — just open Premiere and click Connect in the panel; we detect the connection automatically."}
+                </p>
+                <button
+                  onClick={installPremiere}
+                  disabled={premiereInstalling}
+                  className="bg-primary text-primary-foreground rounded-full px-4 py-2 font-medium text-sm hover:opacity-90 disabled:opacity-50 transition-opacity">
+                  {lang === "pt" ? "Ligar Premiere" : "Connect Premiere"}
+                </button>
+                {premiereError && <p className="text-xs text-red-400">{premiereError}</p>}
               </div>
             )}
           </div>

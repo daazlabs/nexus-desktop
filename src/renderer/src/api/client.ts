@@ -378,6 +378,76 @@ export const api = {
     return nexusApi.connectors?.autocadInstall?.(onProgress, onDone) ?? (() => {})
   },
 
+  getPhotoshopStatus: async (): Promise<{
+    supported: boolean
+    provisioned: boolean
+    proxyRunning: boolean
+    mcpConnected: boolean
+    pluginConnected: boolean
+    connected: boolean
+  }> => {
+    return (
+      (await nexusApi.connectors?.photoshopStatus?.()) || {
+        supported: false,
+        provisioned: false,
+        proxyRunning: false,
+        mcpConnected: false,
+        pluginConnected: false,
+        connected: false,
+      }
+    )
+  },
+
+  installPhotoshop: (
+    onProgress: (data: { step: string; pct: number }) => void,
+    onDone: (data: { ok: boolean; status?: unknown; error?: string }) => void,
+  ): (() => void) => {
+    return nexusApi.connectors?.photoshopInstall?.(onProgress, onDone) ?? (() => {})
+  },
+
+  disconnectPhotoshop: async () => {
+    return await nexusApi.connectors?.photoshopDisconnect?.()
+  },
+
+  showPhotoshopInstaller: async () => {
+    return await nexusApi.connectors?.photoshopShowInstaller?.()
+  },
+
+  getPremiereStatus: async (): Promise<{
+    supported: boolean
+    provisioned: boolean
+    proxyRunning: boolean
+    mcpConnected: boolean
+    pluginConnected: boolean
+    connected: boolean
+  }> => {
+    return (
+      (await nexusApi.connectors?.premiereStatus?.()) || {
+        supported: false,
+        provisioned: false,
+        proxyRunning: false,
+        mcpConnected: false,
+        pluginConnected: false,
+        connected: false,
+      }
+    )
+  },
+
+  installPremiere: (
+    onProgress: (data: { step: string; pct: number }) => void,
+    onDone: (data: { ok: boolean; status?: unknown; error?: string }) => void,
+  ): (() => void) => {
+    return nexusApi.connectors?.premiereInstall?.(onProgress, onDone) ?? (() => {})
+  },
+
+  disconnectPremiere: async () => {
+    return await nexusApi.connectors?.premiereDisconnect?.()
+  },
+
+  showPremiereInstaller: async () => {
+    return await nexusApi.connectors?.premiereShowInstaller?.()
+  },
+
   listMcpServers: async (): Promise<{
     id: string; command: string; args: string[]; env: Record<string, string>
     enabled: boolean; transport: "stdio" | "http"; url?: string; cwd?: string

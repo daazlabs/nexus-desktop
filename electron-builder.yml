@@ -39,6 +39,20 @@ extraResources:
   - from: ../mcp-servers/n8n-server
     to: mcp-servers/n8n-server
     filter: ['dist/**/*', 'package.json', 'node_modules/**/*']
+  - from: ../mcp-servers/magnific-server
+    to: mcp-servers/magnific-server
+    filter: ['dist/**/*', 'package.json', 'node_modules/**/*']
+  # Adobe MCP server (vendored adb-mcp, see mcp-servers/adobe-server/
+  # NOTICE.md) — pure Python source, no node_modules to bundle. Not
+  # platform-gated like autocad-server below: Photoshop runs on both macOS
+  # and Windows. uv, the proxy binary and the .ccx plugin installer are
+  # NOT bundled here — adobeRuntime.ts downloads the right one for the
+  # current platform/arch at runtime (same rationale as the AutoCAD Python
+  # runtime: avoids baking every mac-arm64/mac-x64/win-x64 combination into
+  # every installer).
+  - from: ../mcp-servers/adobe-server
+    to: mcp-servers/adobe-server
+    filter: ['mcp/**/*', 'LICENSE', 'NOTICE.md']
 
 linux:
   target:

@@ -52,6 +52,46 @@ const api = {
       ipcRenderer.send('nexus:connectors:autocad:install')
       return cleanup
     },
+    photoshopStatus: () => ipcRenderer.invoke('nexus:connectors:photoshop:status'),
+    photoshopDisconnect: () => ipcRenderer.invoke('nexus:connectors:photoshop:disconnect'),
+    photoshopShowInstaller: () => ipcRenderer.invoke('nexus:connectors:photoshop:showInstaller'),
+    premiereStatus: () => ipcRenderer.invoke('nexus:connectors:premiere:status'),
+    premiereDisconnect: () => ipcRenderer.invoke('nexus:connectors:premiere:disconnect'),
+    premiereShowInstaller: () => ipcRenderer.invoke('nexus:connectors:premiere:showInstaller'),
+    premiereInstall: (
+      onProgress: (data: { step: string; pct: number }) => void,
+      onDone: (data: { ok: boolean; status?: unknown; error?: string }) => void,
+    ): (() => void) => {
+      const progressHandler = (_: any, data: { step: string; pct: number }) => onProgress(data)
+      const doneHandler = (_: any, data: { ok: boolean; status?: unknown; error?: string }) => {
+        cleanup(); onDone(data)
+      }
+      const cleanup = () => {
+        ipcRenderer.removeListener('nexus:connectors:premiere:progress', progressHandler)
+        ipcRenderer.removeListener('nexus:connectors:premiere:done', doneHandler)
+      }
+      ipcRenderer.on('nexus:connectors:premiere:progress', progressHandler)
+      ipcRenderer.on('nexus:connectors:premiere:done', doneHandler)
+      ipcRenderer.send('nexus:connectors:premiere:install')
+      return cleanup
+    },
+    photoshopInstall: (
+      onProgress: (data: { step: string; pct: number }) => void,
+      onDone: (data: { ok: boolean; status?: unknown; error?: string }) => void,
+    ): (() => void) => {
+      const progressHandler = (_: any, data: { step: string; pct: number }) => onProgress(data)
+      const doneHandler = (_: any, data: { ok: boolean; status?: unknown; error?: string }) => {
+        cleanup(); onDone(data)
+      }
+      const cleanup = () => {
+        ipcRenderer.removeListener('nexus:connectors:photoshop:progress', progressHandler)
+        ipcRenderer.removeListener('nexus:connectors:photoshop:done', doneHandler)
+      }
+      ipcRenderer.on('nexus:connectors:photoshop:progress', progressHandler)
+      ipcRenderer.on('nexus:connectors:photoshop:done', doneHandler)
+      ipcRenderer.send('nexus:connectors:photoshop:install')
+      return cleanup
+    },
   },
   mcp: {
     list: () => ipcRenderer.invoke('nexus:mcp:list'),

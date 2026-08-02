@@ -16,6 +16,24 @@ export interface OAuthFlowConfig {
   clientSecret?: string
   scopes: string[]
   extraAuthorizeParams?: Record<string, string>
+  // Google's "Desktop app" client type exempts loopback redirect_uris from
+  // exact pre-registration (any 127.0.0.1 port is accepted), so the default
+  // ephemeral port (0) works. Providers using plain Dynamic Client
+  // Registration (e.g. Canva) validate redirect_uri by exact match against
+  // what was registered — those need a fixed port here instead.
+  fixedPort?: number
+  // 'body' (default): client_id/client_secret as form fields — what Google's
+  // token endpoint expects. 'basic': RFC 6749 §2.3.1 HTTP Basic auth header
+  // instead, client_secret omitted from the body — what a DCR-registered
+  // client declaring token_endpoint_auth_method: "client_secret_basic"
+  // (e.g. Canva) expects.
+  clientAuthMethod?: 'body' | 'basic'
+}
+
+function basicAuthHeader(clientId: string, clientSecret: string | undefined, method: 'body' | 'basic' | undefined): Record<string, string> {
+  if (method !== 'basic' || !clientSecret) return {}
+  const basic = Buffer.from(`${clientId}:${clientSecret}`).toString('base64')
+  return { Authorization: `Basic ${basic}` }
 }
 
 function pkcePair(): { verifier: string; challenge: string } {
@@ -24,7 +42,7 @@ function pkcePair(): { verifier: string; challenge: string } {
   return { verifier, challenge }
 }
 
-function listenForCallback(): Promise<{
+function listenForCallback(fixedPort?: number): Promise<{
   server: http.Server
   port: number
   waitForCode: () => Promise<{ code: string; state: string }>
@@ -57,7 +75,7 @@ function listenForCallback(): Promise<{
       settleCode({ code, state })
     })
 
-    server.listen(0, '127.0.0.1', () => {
+    server.listen(fixedPort ?? 0, '127.0.0.1', () => {
       const address = server.address()
       if (address && typeof address === 'object') {
         resolve({ server, port: address.port, waitForCode: () => codePromise })
@@ -82,7 +100,7 @@ function listenForCallback(): Promise<{
 export async function runPkceFlow(config: OAuthFlowConfig, timeoutMs = 600000): Promise<OAuthTokenBlob> {
   const { verifier, challenge } = pkcePair()
   const state = crypto.randomBytes(16).toString('hex')
-  const { server, port, waitForCode } = await listenForCallback()
+  const { server, port, waitForCode } = await listenForCallback(config.fixedPort)
 
   try {
     const redirectUri = `http://127.0.0.1:${port}/callback`
@@ -113,11 +131,14 @@ export async function runPkceFlow(config: OAuthFlowConfig, timeoutMs = 600000): 
       grant_type: 'authorization_code',
       redirect_uri: redirectUri,
     })
-    if (config.clientSecret) tokenBody.set('client_secret', config.clientSecret)
+    if (config.clientSecret && config.clientAuthMethod !== 'basic') tokenBody.set('client_secret', config.clientSecret)
 
     const tokenResp = await fetch(config.tokenUrl, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        ...basicAuthHeader(config.clientId, config.clientSecret, config.clientAuthMethod),
+      },
       body: tokenBody,
     })
     if (!tokenResp.ok) {
@@ -137,17 +158,21 @@ export async function runPkceFlow(config: OAuthFlowConfig, timeoutMs = 600000): 
 
 export async function refreshAccessToken(
   tokenUrl: string, clientId: string, clientSecret: string | undefined, refreshToken: string,
+  clientAuthMethod?: 'body' | 'basic',
 ): Promise<{ access_token: string; expires_at: number }> {
   const body = new URLSearchParams({
     client_id: clientId,
     refresh_token: refreshToken,
     grant_type: 'refresh_token',
   })
-  if (clientSecret) body.set('client_secret', clientSecret)
+  if (clientSecret && clientAuthMethod !== 'basic') body.set('client_secret', clientSecret)
 
   const resp = await fetch(tokenUrl, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      ...basicAuthHeader(clientId, clientSecret, clientAuthMethod),
+    },
     body,
   })
   if (!resp.ok) throw new Error(`Refresh de token falhou: HTTP ${resp.status}`)
