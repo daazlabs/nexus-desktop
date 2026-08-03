@@ -217,14 +217,21 @@ async function ensureProxyBinary(onProgress: ProgressFn): Promise<void> {
   if (process.platform !== 'win32') fs.chmodSync(proxyExe(), 0o755)
 }
 
+// Checked up front, before any download: these files ship with the app, so
+// if they're missing nothing later can fix it. Same rationale as
+// autocadRuntime's assertVendoredSourcePresent.
+function assertVendoredMcpSourcePresent(): void {
+  const src = path.join(vendoredSourceDir(), 'mcp')
+  if (!fs.existsSync(src)) {
+    throw new Error(`Ficheiros do servidor Adobe não encontrados em "${src}" — build incompleto.`)
+  }
+}
+
 // Re-copied on every call (cheap — plain-text .py files) so an app update
 // always ships the latest vendored server instead of a stale copy left over
 // from a previous install. Same pattern as autocadRuntime's ensureVendoredSource.
 function ensureVendoredMcpSource(): void {
   const src = path.join(vendoredSourceDir(), 'mcp')
-  if (!fs.existsSync(src)) {
-    throw new Error(`Ficheiros do servidor Adobe não encontrados em "${src}" — build incompleto.`)
-  }
   fs.rmSync(mcpDir(), { recursive: true, force: true })
   fs.cpSync(src, mcpDir(), { recursive: true })
 }
@@ -324,6 +331,7 @@ export async function ensureAdobeRuntime(appCfg: AdobeAppConfig, onProgress: Pro
   if (!isSupportedPlatform()) {
     throw new Error(`${appCfg.displayName} só está disponível no macOS e Windows (64-bit).`)
   }
+  assertVendoredMcpSourcePresent()
   fs.mkdirSync(runtimeDir(), { recursive: true })
   onProgress('A preparar...', 5)
   await ensureUv(onProgress)

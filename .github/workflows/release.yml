@@ -69,10 +69,62 @@ jobs:
         with:
           fetch-depth: 0
 
+      # The local MCP connector servers (gdrive/gmail/wordpress/n8n/magnific,
+      # plus the vendored Python ones for Adobe/AutoCAD) live in the *web*
+      # repo, and electron-builder.yml bundles them from ../mcp-servers —
+      # which exists on a dev machine but never on a runner that only checks
+      # out this repo. Without this step electron-builder just logs
+      # "file source doesn't exist" and ships an installer with no
+      # connectors at all (the bug that shipped in <= v1.0.24).
+      # actions/checkout can't write outside the workspace, so check out into
+      # a temp path and move it up next to the repo.
+      - name: Checkout MCP servers (web repo)
+        uses: actions/checkout@v4
+        with:
+          repository: daazlabs/DAAZNEXUS
+          token: ${{ secrets.DAAZNEXUS_TOKEN }}
+          path: _mcp-src
+          sparse-checkout: mcp-servers
+
+      - name: Place MCP servers alongside this repo
+        shell: bash
+        run: |
+          rm -rf ../mcp-servers
+          mv _mcp-src/mcp-servers ../mcp-servers
+          rm -rf _mcp-src
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
+
+      # Only src/ and package.json are tracked for the Node servers — the
+      # dist/ and node_modules/ that electron-builder bundles are build
+      # output, so they have to be produced here. Dev deps (typescript) are
+      # pruned afterwards so they don't ride along inside every installer.
+      - name: Build MCP servers (Node)
+        shell: bash
+        run: |
+          for d in gdrive-server gmail-server wordpress-server n8n-server magnific-server; do
+            echo "== building $d"
+            (cd "../mcp-servers/$d" && npm ci && npm run build && npm prune --omit=dev)
+          done
+
+      # electron-builder only *warns* about missing extraResources, so a
+      # broken bundle would silently ship again. Fail here instead.
+      - name: Verify MCP servers are ready to bundle
+        shell: bash
+        run: |
+          missing=0
+          for d in gdrive-server gmail-server wordpress-server n8n-server magnific-server; do
+            for p in dist/index.js package.json node_modules; do
+              [ -e "../mcp-servers/$d/$p" ] || { echo "MISSING: mcp-servers/$d/$p"; missing=1; }
+            done
+          done
+          [ -e ../mcp-servers/adobe-server/mcp/ps-mcp.py ] || { echo "MISSING: mcp-servers/adobe-server/mcp/ps-mcp.py"; missing=1; }
+          [ -e ../mcp-servers/autocad-server/src/server.py ] || { echo "MISSING: mcp-servers/autocad-server/src/server.py"; missing=1; }
+          [ "$missing" -eq 0 ] || { echo "Aborting: connectors would be missing from the installer."; exit 1; }
+          echo "All MCP servers present."
 
       - name: Install root dependencies
         run: npm ci

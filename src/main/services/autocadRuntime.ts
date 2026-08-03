@@ -142,14 +142,21 @@ async function ensureDeps(onProgress: ProgressFn): Promise<void> {
   }
 }
 
+// Checked up front, before any download: these files ship with the app, so
+// if they're missing nothing later can fix it — no point making the user
+// wait through a ~40 MB Python install first.
+function assertVendoredSourcePresent(): void {
+  const src = vendoredSourceDir()
+  if (!fs.existsSync(src)) {
+    throw new Error(`Ficheiros do servidor AutoCAD não encontrados em "${src}" — build incompleto.`)
+  }
+}
+
 // Re-copied on every call (cheap — a few plain-text .py files) so an app
 // update always ships the latest vendored server instead of a stale copy
 // left over from a previous install.
 function ensureVendoredSource(): void {
   const src = vendoredSourceDir()
-  if (!fs.existsSync(src)) {
-    throw new Error(`Ficheiros do servidor AutoCAD não encontrados em "${src}" — build incompleto.`)
-  }
   fs.rmSync(cadMcpDir(), { recursive: true, force: true })
   fs.cpSync(src, cadMcpDir(), { recursive: true })
 }
@@ -171,6 +178,7 @@ export async function ensureAutocadRuntime(onProgress: ProgressFn = () => {}): P
   if (!isSupportedPlatform()) {
     throw new Error('O AutoCAD só está disponível no Windows (usa automação COM, que não existe no macOS/Linux).')
   }
+  assertVendoredSourcePresent()
   fs.mkdirSync(runtimeDir(), { recursive: true })
   onProgress('A preparar...', 5)
   await ensurePython(onProgress)
