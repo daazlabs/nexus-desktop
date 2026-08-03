@@ -152,6 +152,14 @@ jobs:
               missing=1
             fi
           done
+          # The dependency each Node server actually dies without. Checking the
+          # source tree alone is what let v1.0.31 ship with dist/ but no
+          # node_modules — electron-builder silently dropped them (see the
+          # extraResources comment in electron-builder.yml).
+          for d in gdrive-server gmail-server wordpress-server n8n-server magnific-server; do
+            [ -e "../mcp-servers/$d/node_modules/@modelcontextprotocol/sdk/package.json" ] \
+              || { echo "MISSING: mcp-servers/$d/node_modules/@modelcontextprotocol/sdk"; missing=1; }
+          done
           [ "$missing" -eq 0 ] || { echo "Aborting: connectors would be missing from the installer."; exit 1; }
           echo "All MCP servers present."
 
@@ -164,6 +172,27 @@ jobs:
 
       - name: Build
         run: npm run build
+
+      # Checks the *packaged output*, not the source tree — the only check that
+      # would have caught the missing node_modules before users did.
+      - name: Verify the packaged app really contains the connectors
+        shell: bash
+        run: |
+          npx electron-builder --dir
+          # `|| true`: one of the two globs never matches on a given platform,
+          # and a failed command substitution would abort the step under -e.
+          out=$( { ls -d dist/*-unpacked dist/mac*/DaazNexus.app/Contents 2>/dev/null || true; } | head -1)
+          [ -n "$out" ] || { echo "Could not find the unpacked app under dist/"; exit 1; }
+          res="$out/Resources"; [ -d "$res" ] || res="$out/resources"
+          missing=0
+          for d in gdrive-server gmail-server wordpress-server n8n-server magnific-server; do
+            for p in dist/index.js node_modules/@modelcontextprotocol/sdk/package.json; do
+              [ -e "$res/mcp-servers/$d/$p" ] || { echo "MISSING in package: $d/$p"; missing=1; }
+            done
+          done
+          [ -e "$res/oauth-clients/google-desktop-client.json" ] || { echo "MISSING in package: oauth-clients"; missing=1; }
+          [ "$missing" -eq 0 ] || { echo "Aborting: the installer would be broken."; exit 1; }
+          echo "Packaged app verified."
 
       - name: Package (Linux)
         if: matrix.platform == 'linux'

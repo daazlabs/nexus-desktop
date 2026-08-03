@@ -35,21 +35,31 @@ extraResources:
   - from: build-oauth
     to: oauth-clients
     filter: ['*-desktop-client.json']
-  - from: ../mcp-servers/gdrive-server
-    to: mcp-servers/gdrive-server
-    filter: ['dist/**/*', 'package.json', 'node_modules/**/*']
-  - from: ../mcp-servers/gmail-server
-    to: mcp-servers/gmail-server
-    filter: ['dist/**/*', 'package.json', 'node_modules/**/*']
-  - from: ../mcp-servers/wordpress-server
-    to: mcp-servers/wordpress-server
-    filter: ['dist/**/*', 'package.json', 'node_modules/**/*']
-  - from: ../mcp-servers/n8n-server
-    to: mcp-servers/n8n-server
-    filter: ['dist/**/*', 'package.json', 'node_modules/**/*']
-  - from: ../mcp-servers/magnific-server
-    to: mcp-servers/magnific-server
-    filter: ['dist/**/*', 'package.json', 'node_modules/**/*']
+  # Copied from the *parent* directory on purpose. electron-builder hard-codes
+  # `if (relative === "node_modules") return false` (app-builder-lib
+  # util/filter.js) — a node_modules sitting at the root of a copied folder is
+  # dropped whatever the filter says, so the per-server `from:` these used to
+  # have shipped dist/ without a single dependency and every Node connector
+  # died at startup with ERR_MODULE_NOT_FOUND. One level up, the path becomes
+  # `<server>/node_modules` and that rule no longer applies.
+  - from: ../mcp-servers
+    to: mcp-servers
+    filter:
+      - 'gdrive-server/dist/**/*'
+      - 'gdrive-server/package.json'
+      - 'gdrive-server/node_modules/**/*'
+      - 'gmail-server/dist/**/*'
+      - 'gmail-server/package.json'
+      - 'gmail-server/node_modules/**/*'
+      - 'wordpress-server/dist/**/*'
+      - 'wordpress-server/package.json'
+      - 'wordpress-server/node_modules/**/*'
+      - 'n8n-server/dist/**/*'
+      - 'n8n-server/package.json'
+      - 'n8n-server/node_modules/**/*'
+      - 'magnific-server/dist/**/*'
+      - 'magnific-server/package.json'
+      - 'magnific-server/node_modules/**/*'
   # Adobe MCP server (vendored adb-mcp, see mcp-servers/adobe-server/
   # NOTICE.md) — pure Python source, no node_modules to bundle. Not
   # platform-gated like autocad-server below: Photoshop runs on both macOS
