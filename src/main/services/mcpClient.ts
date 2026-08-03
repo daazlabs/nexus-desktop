@@ -12,6 +12,9 @@ export interface McpConnection {
   serverId: string
   client: Client
   lastUsed: number
+  // Last-resort kill for a stdio child that ignores a graceful close, so
+  // disconnecting can never hang on a stuck subprocess. Absent for HTTP.
+  forceKill?: () => void
 }
 
 export async function connectHttp(
@@ -48,7 +51,20 @@ export async function connectStdio(
   try {
     const client = new Client({ name: 'daaznexus-desktop', version: '1.0.0' })
     await client.connect(transport)
-    return { serverId, client, lastUsed: Date.now() }
+    return {
+      serverId,
+      client,
+      lastUsed: Date.now(),
+      // `_process` is the SDK's private handle; only used after a graceful
+      // close has already timed out, where the alternative is an orphan.
+      forceKill: () => {
+        try {
+          ;(transport as unknown as { _process?: { kill: (s: string) => void } })._process?.kill('SIGKILL')
+        } catch {
+          /* already gone */
+        }
+      },
+    }
   } catch (e) {
     const detail = stderrTail.trim()
     if (!detail) throw e
@@ -75,8 +91,23 @@ export async function callTool(conn: McpConnection, toolName: string, args: Reco
   return result.isError ? `Error: ${text}` : text
 }
 
-export async function closeConnection(conn: McpConnection): Promise<void> {
-  await conn.client.close()
+// Never waits forever: a server that won't shut down cleanly used to leave the
+// caller hanging, which meant "Desligar" never got to the step that actually
+// removes the credential.
+export async function closeConnection(conn: McpConnection, timeoutMs = 3000): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<'timeout'>((resolve) => {
+    timer = setTimeout(() => resolve('timeout'), timeoutMs)
+  })
+  try {
+    const result = await Promise.race([conn.client.close().then(() => 'closed' as const), timeout])
+    if (result === 'timeout') {
+      console.warn(`[mcp] '${conn.serverId}' didn't close within ${timeoutMs}ms — killing it`)
+      conn.forceKill?.()
+    }
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
 }
 
 // Namespaces `tool.name` as `mcp__<serverId>__<tool.name>` (same convention

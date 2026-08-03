@@ -156,6 +156,38 @@ export async function runPkceFlow(config: OAuthFlowConfig, timeoutMs = 600000): 
   }
 }
 
+// RFC 7009. Best-effort by design: the local credential is deleted whether or
+// not the provider confirms, so a network failure here must never leave the
+// user unable to disconnect.
+export async function revokeToken(
+  revokeUrl: string, clientId: string, clientSecret: string | undefined, token: string,
+  clientAuthMethod?: 'body' | 'basic',
+): Promise<boolean> {
+  const body = new URLSearchParams({ token })
+  if (clientAuthMethod !== 'basic') {
+    body.set('client_id', clientId)
+    if (clientSecret) body.set('client_secret', clientSecret)
+  }
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 5000)
+  try {
+    const res = await fetch(revokeUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        ...basicAuthHeader(clientId, clientSecret, clientAuthMethod),
+      },
+      body,
+      signal: controller.signal,
+    })
+    return res.ok
+  } catch {
+    return false
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 export async function refreshAccessToken(
   tokenUrl: string, clientId: string, clientSecret: string | undefined, refreshToken: string,
   clientAuthMethod?: 'body' | 'basic',

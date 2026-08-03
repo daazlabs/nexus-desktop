@@ -101,10 +101,14 @@ const { clientId: CANVA_CLIENT_ID, clientSecret: CANVA_CLIENT_SECRET } = loadDes
 // used at registration time (see mcp-servers docs / setup notes).
 const CANVA_REDIRECT_PORT = 53791
 
-const OAUTH_PROVIDERS: Record<string, { authorizeUrl: string; tokenUrl: string; clientId: string; clientSecret?: string; extraAuthorizeParams?: Record<string, string>; fixedPort?: number; clientAuthMethod?: 'body' | 'basic' }> = {
+const OAUTH_PROVIDERS: Record<string, { authorizeUrl: string; tokenUrl: string; revokeUrl?: string; clientId: string; clientSecret?: string; extraAuthorizeParams?: Record<string, string>; fixedPort?: number; clientAuthMethod?: 'body' | 'basic' }> = {
   google: {
     authorizeUrl: 'https://accounts.google.com/o/oauth2/v2/auth',
     tokenUrl: 'https://oauth2.googleapis.com/token',
+    // Disconnecting has to mean "cancel", not just "forget": without this the
+    // token the app already handed out stays valid on Google's side for up to
+    // an hour after the user clicks Desligar.
+    revokeUrl: 'https://oauth2.googleapis.com/revoke',
     clientId: GOOGLE_DESKTOP_CLIENT_ID,
     clientSecret: GOOGLE_DESKTOP_CLIENT_SECRET,
     extraAuthorizeParams: { access_type: 'offline', prompt: 'consent' },
@@ -115,6 +119,9 @@ const OAUTH_PROVIDERS: Record<string, { authorizeUrl: string; tokenUrl: string; 
   canva: {
     authorizeUrl: 'https://mcp.canva.com/authorize',
     tokenUrl: 'https://mcp.canva.com/token',
+    // Canva publishes this in its OAuth metadata (/.well-known/oauth-
+    // authorization-server) — same URL as the token endpoint, per RFC 7009.
+    revokeUrl: 'https://mcp.canva.com/token',
     clientId: CANVA_CLIENT_ID,
     clientSecret: CANVA_CLIENT_SECRET,
     fixedPort: CANVA_REDIRECT_PORT,
@@ -133,6 +140,34 @@ const CONNECTOR_SCOPES: Record<string, string[]> = {
     'https://www.googleapis.com/auth/gmail.readonly',
     'https://www.googleapis.com/auth/gmail.send',
   ],
+}
+
+// Which account is this connected to? Asked once at connect time and stored
+// with the token, so the card can say "Ligado — nome@gmail.com" instead of a
+// bare "Ligado" that leaves the user guessing which account they picked on
+// Google's consent screen. Each connector uses an endpoint its own scopes
+// already allow — there is deliberately no extra "read your profile" scope.
+const ACCOUNT_ENDPOINT: Record<string, { url: string; pick: (d: any) => string | undefined }> = {
+  gdrive: {
+    url: 'https://www.googleapis.com/drive/v3/about?fields=user(emailAddress)',
+    pick: (d) => d?.user?.emailAddress,
+  },
+  gmail: {
+    url: 'https://gmail.googleapis.com/gmail/v1/users/me/profile',
+    pick: (d) => d?.emailAddress,
+  },
+}
+
+async function fetchAccountLabel(connectorId: string, accessToken: string): Promise<string | undefined> {
+  const ep = ACCOUNT_ENDPOINT[connectorId]
+  if (!ep) return undefined
+  try {
+    const res = await fetch(ep.url, { headers: { Authorization: `Bearer ${accessToken}` } })
+    if (!res.ok) return undefined
+    return ep.pick(await res.json())
+  } catch {
+    return undefined // puramente informativo — nunca impede a ligação
+  }
 }
 
 const CONNECTOR_PROVIDER: Record<string, string> = {
@@ -250,11 +285,24 @@ export interface ConnectorState {
   authMethodSupported: string
   status: 'connected' | 'disconnected'
   available: boolean
+  // Which account this is connected to (e.g. the Google address), when the
+  // connector can tell us. Shown next to "Ligado".
+  account?: string
   // Why the last attempt to start this connector's server failed. 'status'
   // only ever meant "credentials are stored", so a server that couldn't
   // spawn still showed as connected while the chat silently got no tools —
   // the failure lived in a console the user never sees.
   lastError?: string
+}
+
+function readAccountLabel(connectorId: string): string | undefined {
+  const raw = getSystemKey(vaultKey(connectorId))
+  if (!raw) return undefined
+  try {
+    return JSON.parse(raw).account || undefined
+  } catch {
+    return undefined // conectores de token simples (GitHub, n8n) não são JSON
+  }
 }
 
 export function listConnectors(): ConnectorState[] {
@@ -265,6 +313,7 @@ export function listConnectors(): ConnectorState[] {
     status: hasVaultKey(vaultKey(def.id)) ? 'connected' : 'disconnected',
     available: def.authMethod === 'pat' ? true : isOAuthConfigured(def.id),
     lastError: lastConnectionError.get(def.id),
+    account: readAccountLabel(def.id),
   }))
 }
 
@@ -306,7 +355,8 @@ export async function connectOAuth(connectorId: string): Promise<ConnectorState[
     extraAuthorizeParams: provider.extraAuthorizeParams,
     fixedPort: provider.fixedPort,
   })
-  saveSystemKey(vaultKey(connectorId), JSON.stringify(token))
+  const account = await fetchAccountLabel(connectorId, token.access_token)
+  saveSystemKey(vaultKey(connectorId), JSON.stringify({ ...token, account }))
   return listConnectors()
 }
 
@@ -528,7 +578,36 @@ export function showPremiereInstallerInFolder(): void {
   adobeRuntime.showPluginInstallerInFolder(PREMIERE)
 }
 
+// Tells the provider to cancel the token we were given. Fire-and-forget: the
+// local deletion below never waits on it.
+function revokeAtProvider(connectorId: string, rawBlob: string | null): void {
+  if (!rawBlob) return
+  const provider = OAUTH_PROVIDERS[CONNECTOR_PROVIDER[connectorId]]
+  if (!provider?.revokeUrl) return
+  let blob: { access_token?: string; refresh_token?: string }
+  try {
+    blob = JSON.parse(rawBlob)
+  } catch {
+    return
+  }
+  // Revoking the refresh token invalidates every access token derived from it.
+  const token = blob.refresh_token || blob.access_token
+  if (!token) return
+  void oauthFlow
+    .revokeToken(provider.revokeUrl, provider.clientId, provider.clientSecret, token, provider.clientAuthMethod)
+    .then((ok) => console.log(`[mcp] revoke '${connectorId}': ${ok ? 'aceite' : 'recusada/falhou'}`))
+}
+
 export async function disconnectConnector(connectorId: string): Promise<void> {
+  const rawBlob = getSystemKey(vaultKey(connectorId))
+  revokeAtProvider(connectorId, rawBlob)
+  // The credential goes first, deliberately. Everything below is cleanup of a
+  // subprocess; if that throws or hangs, "Desligar" must still have taken the
+  // access away — otherwise the card keeps saying "Ligado" and the tools keep
+  // being handed to the model, which is the opposite of what the user asked
+  // for. (Previously this ran last, behind an unbounded await.)
+  deleteSystemKey(vaultKey(connectorId))
+  lastConnectionError.delete(connectorId)
   const conn = connections.get(connectorId)
   if (conn) {
     connections.delete(connectorId)
@@ -538,7 +617,6 @@ export async function disconnectConnector(connectorId: string): Promise<void> {
       /* already gone */
     }
   }
-  deleteSystemKey(vaultKey(connectorId))
 }
 
 // PAT connectors (GitHub) store the token as-is. OAuth connectors (Drive)

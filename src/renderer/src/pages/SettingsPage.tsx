@@ -128,7 +128,7 @@ export default function SettingsPage({ lang, themeColor, setThemeColor, onNaviga
   const [remoteUrl, setRemoteUrl] = useState("")
   const [remoteKey, setRemoteKey] = useState("")
   const [remoteSaved, setRemoteSaved] = useState<boolean | null>(null)
-  const [connectors, setConnectors] = useState<{ id: string; name: string; authMethodSupported: string; status: string; available: boolean; lastError?: string }[]>([])
+  const [connectors, setConnectors] = useState<{ id: string; name: string; authMethodSupported: string; status: string; available: boolean; lastError?: string; account?: string }[]>([])
   const [connectorInput, setConnectorInput] = useState<Record<string, string>>({})
   const [connectorSaving, setConnectorSaving] = useState<string | null>(null)
   const [wpForm, setWpForm] = useState({ siteUrl: "", username: "", appPassword: "" })
@@ -522,7 +522,15 @@ export default function SettingsPage({ lang, themeColor, setThemeColor, onNaviga
             return (
               <div key={c.id} className={`bg-card border rounded-xl p-4 transition-colors ${connected ? "border-green-700/40 border-l-4 border-l-green-500" : "border-border"}`}>
                 <div className="flex items-center justify-between mb-3">
-                  <span className="font-medium text-sm text-foreground">{c.name}</span>
+                  <div className="min-w-0">
+                    <span className="font-medium text-sm text-foreground">{c.name}</span>
+                    {/* Sem isto o cartão só diz "Ligado" e não há forma de saber
+                        com que conta se ficou ligado — a pergunta que o
+                        utilizador fez três vezes seguidas. */}
+                    {connected && c.account && (
+                      <span className="block truncate text-xs text-muted-foreground">{c.account}</span>
+                    )}
+                  </div>
                   {connected
                     ? <span className="inline-flex items-center gap-1 bg-green-500/15 text-green-400 border border-green-500/30 rounded-full px-2.5 py-0.5 text-xs font-medium">{lang === "pt" ? "Ligado" : "Connected"}</span>
                     : <span className="text-xs text-muted-foreground">{lang === "pt" ? "Desligado" : "Disconnected"}</span>}
