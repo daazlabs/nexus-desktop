@@ -214,6 +214,10 @@ export default function ChatPage({ onNavigate, colorMode, setColorMode, lang, se
   const mountedRef = useRef(true)
   const convIdRef = useRef<number | null>(null)
   const messagesRef = useRef<Message[]>([])
+  // Lets handleEdit/handleRegenerate (defined above sendMessage, and kept
+  // referentially stable for MessageBubble's memo) call the current
+  // sendMessage without capturing a stale copy of it.
+  const sendMessageRef = useRef<(content?: string) => Promise<void>>(async () => {})
   const convsRef = useRef<{ id: number; title: string }[]>([])
   const cleanupPermRef = useRef<(() => void) | null>(null)
   const cleanupResolvedRef = useRef<(() => void) | null>(null)
@@ -402,11 +406,24 @@ export default function ChatPage({ onNavigate, colorMode, setColorMode, lang, se
     await api.updateConversationTitle(id, title).catch(() => null)
   }, [])
 
+  // Both of these used to stop after dropping the old messages and dumping
+  // the text back into the input box, leaving the user to press send again —
+  // so "Enviar" and "Regenerar" appeared to do nothing at all. They now send
+  // for real. The ref indirection keeps these callbacks stable (MessageBubble
+  // is memoized on their identity) without capturing a stale sendMessage.
+  const truncateAndSend = async (msgId: number, content: string) => {
+    await api.truncateMessages(convIdRef.current!, msgId).catch(() => null)
+    const truncated = messagesRef.current.filter(m => m.id < msgId)
+    // Set by hand: the effect that syncs this ref only runs after the
+    // re-render, and sendMessage reads it now to build the history it sends.
+    messagesRef.current = truncated
+    setMessages(truncated)
+    await sendMessageRef.current(content)
+  }
+
   const handleEdit = useCallback(async (msgId: number, newContent: string) => {
     if (!convIdRef.current) return
-    await api.truncateMessages(convIdRef.current, msgId).catch(() => null)
-    setMessages(prev => prev.filter(m => m.id < msgId))
-    setInput(newContent)
+    await truncateAndSend(msgId, newContent)
   }, [])
 
   const handleRegenerate = useCallback(async (msgId: number) => {
@@ -416,9 +433,7 @@ export default function ChatPage({ onNavigate, colorMode, setColorMode, lang, se
     if (idx < 1) return
     const prevUser = [...msgs].slice(0, idx).reverse().find(m => m.role === "user")
     if (!prevUser) return
-    await api.truncateMessages(convIdRef.current, msgId).catch(() => null)
-    setMessages(prev => prev.filter(m => m.id < msgId))
-    setInput(prevUser.content)
+    await truncateAndSend(msgId, prevUser.content)
   }, [])
 
   const deleteConv = useCallback(async (id: number) => {
@@ -533,9 +548,14 @@ export default function ChatPage({ onNavigate, colorMode, setColorMode, lang, se
     if (fileInputRef.current) fileInputRef.current.value = ""
   }
 
-  const sendMessage = async () => {
-    if ((!input.trim() && pendingFiles.length === 0) || loading) return
-    let content = input.trim()
+  // Called two ways: from the input box (InputArea wires this straight to
+  // onClick, so the first argument is a MouseEvent — hence the typeof check
+  // rather than plain truthiness) and from an edited/regenerated message,
+  // which passes the text to send directly instead of going through the box.
+  const sendMessage = async (overrideContent?: string) => {
+    const override = typeof overrideContent === "string" ? overrideContent.trim() : ""
+    if ((!override && !input.trim() && pendingFiles.length === 0) || loading) return
+    let content = override || input.trim()
     if (pendingFiles.length > 0) {
       if (!content) content = lang === "pt" ? "Analisa os seguintes ficheiros:" : "Analyze the following files:"
       for (const f of pendingFiles) {
@@ -548,7 +568,10 @@ export default function ChatPage({ onNavigate, colorMode, setColorMode, lang, se
         }
       }
     }
-    setInput(""); setPendingFiles([])
+    // Don't wipe a draft the user left in the box just because they resent an
+    // older message from the thread.
+    if (!override) setInput("")
+    setPendingFiles([])
 
     const ts = Date.now()
     const placeholderId = -ts
@@ -704,6 +727,7 @@ export default function ChatPage({ onNavigate, colorMode, setColorMode, lang, se
       startStream(cid)
     }
   }
+  sendMessageRef.current = sendMessage
 
   const handleStop = () => {
     const cid = convIdRef.current

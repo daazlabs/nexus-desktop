@@ -128,7 +128,7 @@ export default function SettingsPage({ lang, themeColor, setThemeColor, onNaviga
   const [remoteUrl, setRemoteUrl] = useState("")
   const [remoteKey, setRemoteKey] = useState("")
   const [remoteSaved, setRemoteSaved] = useState<boolean | null>(null)
-  const [connectors, setConnectors] = useState<{ id: string; name: string; authMethodSupported: string; status: string; available: boolean }[]>([])
+  const [connectors, setConnectors] = useState<{ id: string; name: string; authMethodSupported: string; status: string; available: boolean; lastError?: string }[]>([])
   const [connectorInput, setConnectorInput] = useState<Record<string, string>>({})
   const [connectorSaving, setConnectorSaving] = useState<string | null>(null)
   const [wpForm, setWpForm] = useState({ siteUrl: "", username: "", appPassword: "" })
@@ -527,6 +527,16 @@ export default function SettingsPage({ lang, themeColor, setThemeColor, onNaviga
                     ? <span className="inline-flex items-center gap-1 bg-green-500/15 text-green-400 border border-green-500/30 rounded-full px-2.5 py-0.5 text-xs font-medium">{lang === "pt" ? "Ligado" : "Connected"}</span>
                     : <span className="text-xs text-muted-foreground">{lang === "pt" ? "Desligado" : "Disconnected"}</span>}
                 </div>
+                {c.lastError && (
+                  <div className="mb-3 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2">
+                    <p className="text-xs font-medium text-red-400">
+                      {lang === "pt"
+                        ? "O servidor deste conector não arrancou — as suas ferramentas não estão disponíveis no chat."
+                        : "This connector's server failed to start — its tools aren't available in the chat."}
+                    </p>
+                    <p className="mt-1 text-xs text-red-400/80 break-words">{c.lastError}</p>
+                  </div>
+                )}
                 {connected ? (
                   <button
                     onClick={() => disconnectConnector(c.id)}

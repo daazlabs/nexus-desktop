@@ -72,8 +72,11 @@ function MessageBubble({ lang, msg, streamingContent, toolEvents, isStreaming, s
 
   const submitEdit = () => {
     const trimmed = editValue.trim()
-    if (trimmed && trimmed !== msg.content && onEdit) onEdit(msg.id, trimmed)
     setEditing(false)
+    // Deliberately no "only if the text changed" check: pressing Enviar
+    // without touching anything is a resend, and silently doing nothing was
+    // indistinguishable from the button being broken.
+    if (trimmed && onEdit) onEdit(msg.id, trimmed)
   }
 
   return (

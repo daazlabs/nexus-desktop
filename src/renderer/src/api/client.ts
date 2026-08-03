@@ -343,7 +343,7 @@ export const api = {
     return { file_id: "", filename: "", mime_type: "", size: 0, type: "", url: "", preview: "" }
   },
 
-  listConnectors: async (): Promise<{ id: string; name: string; authMethodSupported: string; status: string; available: boolean }[]> => {
+  listConnectors: async (): Promise<{ id: string; name: string; authMethodSupported: string; status: string; available: boolean; lastError?: string }[]> => {
     return await nexusApi.connectors?.list?.() || []
   },
 

@@ -6,6 +6,7 @@ import { saveSystemKey, getSystemKey, deleteSystemKey, hasVaultKey } from './key
 import * as mcpClient from './mcpClient.js'
 import * as oauthFlow from './oauthFlow.js'
 import * as customMcpServers from './customMcpServers.js'
+import { buildEnv } from '../mcp/resolveCommand.js'
 import * as autocadRuntime from './autocadRuntime.js'
 import * as adobeRuntime from './adobeRuntime.js'
 import { PHOTOSHOP, PREMIERE, type AdobeAppConfig } from './adobeRuntime.js'
@@ -20,11 +21,16 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 // (see electron-builder.yml extraResources) and read from there instead.
 const REPO_ROOT = path.resolve(__dirname, '..', '..', '..', '..')
 
+// Launched with Electron's own binary running in Node mode (the
+// ELECTRON_RUN_AS_NODE env var, set in getConnection) rather than a bare
+// `node`: a normal user's machine has no reason to have Node.js installed,
+// and these connectors are supposed to need zero setup. Electron already
+// ships a Node runtime — use that one.
 function nodeServer(name: string): string[] {
   const base = app.isPackaged
     ? path.join(process.resourcesPath, 'mcp-servers', name)
     : path.join(REPO_ROOT, 'mcp-servers', name)
-  return ['node', path.join(base, 'dist', 'index.js')]
+  return [process.execPath, path.join(base, 'dist', 'index.js')]
 }
 
 interface ConnectorDef {
@@ -235,12 +241,20 @@ function isOAuthConfigured(connectorId: string): boolean {
 
 const connections = new Map<string, McpConnection>()
 
+// Last failure from getConnection(), per connector, so Settings can show it.
+const lastConnectionError = new Map<string, string>()
+
 export interface ConnectorState {
   id: string
   name: string
   authMethodSupported: string
   status: 'connected' | 'disconnected'
   available: boolean
+  // Why the last attempt to start this connector's server failed. 'status'
+  // only ever meant "credentials are stored", so a server that couldn't
+  // spawn still showed as connected while the chat silently got no tools —
+  // the failure lived in a console the user never sees.
+  lastError?: string
 }
 
 export function listConnectors(): ConnectorState[] {
@@ -250,6 +264,7 @@ export function listConnectors(): ConnectorState[] {
     authMethodSupported: def.authMethod,
     status: hasVaultKey(vaultKey(def.id)) ? 'connected' : 'disconnected',
     available: def.authMethod === 'pat' ? true : isOAuthConfigured(def.id),
+    lastError: lastConnectionError.get(def.id),
   }))
 }
 
@@ -608,12 +623,24 @@ async function getConnection(connectorId: string): Promise<McpConnection | null>
       conn = await mcpClient.connectHttp(connectorId, def.url!, def.buildHeaders?.(token))
     } else {
       const [command, ...args] = def.command!
-      conn = await mcpClient.connectStdio(connectorId, command, args, def.buildEnv?.(token))
+      // StdioClientTransport treats `env` as the child's *entire*
+      // environment, and def.buildEnv only produces the credential vars — so
+      // passing it raw started these servers with no PATH, no SystemRoot
+      // (fatal on Windows) and no proxy settings. customMcpServers.ts always
+      // did this correctly via buildEnv(); the first-party connectors didn't.
+      const env = buildEnv({
+        ...(def.buildEnv?.(token) ?? {}),
+        ...(command === process.execPath ? { ELECTRON_RUN_AS_NODE: '1' } : {}),
+      })
+      conn = await mcpClient.connectStdio(connectorId, command, args, env)
     }
     connections.set(connectorId, conn)
+    lastConnectionError.delete(connectorId)
     return conn
   } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
     console.warn(`[mcp] failed to connect '${connectorId}':`, e)
+    lastConnectionError.set(connectorId, msg)
     return null
   }
 }
