@@ -98,29 +98,64 @@ export function isSupportedPlatform(): boolean {
   return false
 }
 
+// Shown in Settings before the user starts the install, so they know where
+// everything lands and can delete it by hand later. Shared by every Adobe
+// app (Photoshop/Premiere reuse the same uv, proxy and Python cache).
+export function installDir(): string {
+  return runtimeDir()
+}
+
+// Same stall guard as autocadRuntime.downloadFile — a hung download would
+// otherwise leave "A ligar…" spinning forever with no cancel button.
+const DOWNLOAD_STALL_TIMEOUT_MS = 60_000
+
 function downloadFile(url: string, destPath: string): Promise<void> {
   return new Promise((resolve, reject) => {
     const file = fs.createWriteStream(destPath)
+    let settled = false
+    const fail = (err: Error) => {
+      if (settled) return
+      settled = true
+      file.destroy()
+      // A half-written file would make the next attempt extract garbage.
+      fs.rmSync(destPath, { force: true })
+      reject(err)
+    }
+    const done = () => {
+      if (settled) return
+      settled = true
+      resolve()
+    }
+    file.on('error', fail)
     const request = (u: string, redirectsLeft: number) => {
-      https
-        .get(u, { headers: { 'User-Agent': 'daaznexus-desktop' } }, (res) => {
-          if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-            res.resume()
-            if (redirectsLeft <= 0) {
-              reject(new Error(`Too many redirects downloading ${url}`))
-              return
-            }
-            request(res.headers.location, redirectsLeft - 1)
+      const req = https.get(u, { headers: { 'User-Agent': 'daaznexus-desktop' } }, (res) => {
+        if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+          res.resume()
+          if (redirectsLeft <= 0) {
+            fail(new Error(`Demasiados redireccionamentos ao descarregar ${url}.`))
             return
           }
-          if (res.statusCode !== 200) {
-            reject(new Error(`Download failed (${res.statusCode}) for ${u}`))
-            return
-          }
-          res.pipe(file)
-          file.on('finish', () => file.close(() => resolve()))
-        })
-        .on('error', reject)
+          request(res.headers.location, redirectsLeft - 1)
+          return
+        }
+        if (res.statusCode !== 200) {
+          res.resume()
+          fail(new Error(`Falha ao descarregar (${res.statusCode}) de ${u}.`))
+          return
+        }
+        res.on('error', fail)
+        res.pipe(file)
+        file.on('finish', () => file.close(() => done()))
+      })
+      req.setTimeout(DOWNLOAD_STALL_TIMEOUT_MS, () => {
+        req.destroy(
+          new Error(
+            `Sem resposta há ${DOWNLOAD_STALL_TIMEOUT_MS / 1000} segundos ao descarregar de ${new URL(u).host}. ` +
+              'Verifica a ligação à Internet e tenta outra vez — a instalação continua de onde ficou.',
+          ),
+        )
+      })
+      req.on('error', fail)
     }
     request(url, 5)
   })

@@ -276,6 +276,9 @@ export interface AutocadStatus {
   supported: boolean
   provisioned: boolean
   connected: boolean
+  // Where the one-click install puts its files — shown in Settings so the
+  // user knows what's being downloaded and where, before starting.
+  installDir: string
 }
 
 export function getAutocadStatus(): AutocadStatus {
@@ -283,6 +286,7 @@ export function getAutocadStatus(): AutocadStatus {
     supported: autocadRuntime.isSupportedPlatform(),
     provisioned: autocadRuntime.isProvisioned(),
     connected: connections.has('autocad'),
+    installDir: autocadRuntime.installDir(),
   }
 }
 
@@ -308,6 +312,11 @@ export interface AdobeConnectorStatus {
   // Alias of pluginConnected — keeps the same shape as AutocadStatus.connected
   // so the generic "Desligar" button/UI condition can be reused as-is.
   connected: boolean
+  // Same purpose as AutocadStatus.installDir. Shared by every Adobe app.
+  installDir: string
+  // Non-empty when the plugin installer failed to open — the UI turns this
+  // into a "install Creative Cloud, or open the file by hand" warning.
+  pluginInstallerError?: string
 }
 // Kept for backwards-compat call sites; identical shape.
 export type PhotoshopStatus = AdobeConnectorStatus
@@ -324,6 +333,11 @@ interface AdobePluginPingState {
   connected: boolean
   timer: ReturnType<typeof setInterval> | null
   inFlight: boolean
+  // Set when the .ccx plugin installer couldn't be opened at the end of the
+  // install (typically: no Creative Cloud Desktop, which is what handles
+  // .ccx files). Without this the wizard just sits on "waiting for the
+  // plugin" forever with nothing to act on — see getAdobeStatus.
+  installerError?: string
 }
 const adobePingState = new Map<string, AdobePluginPingState>()
 function pingState(appId: string): AdobePluginPingState {
@@ -336,7 +350,8 @@ function pingState(appId: string): AdobePluginPingState {
 }
 
 function getAdobeStatus(appCfg: AdobeAppConfig): AdobeConnectorStatus {
-  const pluginConnected = pingState(appCfg.id).connected
+  const state = pingState(appCfg.id)
+  const pluginConnected = state.connected
   return {
     supported: adobeRuntime.isSupportedPlatform(),
     provisioned: adobeRuntime.isProvisioned(),
@@ -344,6 +359,8 @@ function getAdobeStatus(appCfg: AdobeAppConfig): AdobeConnectorStatus {
     mcpConnected: connections.has(appCfg.id),
     pluginConnected,
     connected: pluginConnected,
+    installDir: adobeRuntime.installDir(),
+    pluginInstallerError: state.installerError,
   }
 }
 
@@ -423,7 +440,11 @@ async function installAdobeApp(
   connections.delete(appCfg.id)
   const conn = await getAdobeConnection(appCfg)
   if (!conn) throw new Error(`Não foi possível preparar o servidor MCP do ${appCfg.displayName}.`)
-  await adobeRuntime.openPluginInstaller(appCfg)
+  // Not fatal — everything else is provisioned and the user can still open
+  // the .ccx by hand — but it has to be *said*, otherwise the card sits on
+  // "waiting for the plugin" forever with no hint of what went wrong.
+  const opened = await adobeRuntime.openPluginInstaller(appCfg)
+  pingState(appCfg.id).installerError = opened.ok ? undefined : opened.error || 'unknown'
   onProgress?.('A aguardar ligação do plugin...', 100)
   startAdobePluginPing(appCfg, conn)
   return getAdobeStatus(appCfg)

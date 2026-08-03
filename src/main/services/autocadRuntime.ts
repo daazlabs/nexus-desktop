@@ -49,29 +49,67 @@ export function isSupportedPlatform(): boolean {
   return process.platform === 'win32'
 }
 
+// Shown in Settings before the user starts the install, so they know where
+// the ~40 MB ends up and can delete it by hand later if they want the space
+// back (deleting it just means the next connect re-downloads).
+export function installDir(): string {
+  return runtimeDir()
+}
+
+// Without this, a download that stalls mid-transfer (flaky wifi, captive
+// portal, python.org unreachable) leaves the install spinning forever with no
+// way out — there's no cancel button. The socket timeout turns a hang into a
+// normal error the user can read and retry from; re-clicking resumes, since
+// every step here is idempotent.
+const DOWNLOAD_STALL_TIMEOUT_MS = 60_000
+
 function downloadFile(url: string, destPath: string): Promise<void> {
   return new Promise((resolve, reject) => {
     const file = fs.createWriteStream(destPath)
+    let settled = false
+    const fail = (err: Error) => {
+      if (settled) return
+      settled = true
+      file.destroy()
+      // A half-written file would make the next attempt extract garbage.
+      fs.rmSync(destPath, { force: true })
+      reject(err)
+    }
+    const done = () => {
+      if (settled) return
+      settled = true
+      resolve()
+    }
+    file.on('error', fail)
     const request = (u: string, redirectsLeft: number) => {
-      https
-        .get(u, (res) => {
-          if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-            res.resume()
-            if (redirectsLeft <= 0) {
-              reject(new Error(`Too many redirects downloading ${url}`))
-              return
-            }
-            request(res.headers.location, redirectsLeft - 1)
+      const req = https.get(u, (res) => {
+        if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+          res.resume()
+          if (redirectsLeft <= 0) {
+            fail(new Error(`Demasiados redireccionamentos ao descarregar ${url}.`))
             return
           }
-          if (res.statusCode !== 200) {
-            reject(new Error(`Download failed (${res.statusCode}) for ${u}`))
-            return
-          }
-          res.pipe(file)
-          file.on('finish', () => file.close(() => resolve()))
-        })
-        .on('error', reject)
+          request(res.headers.location, redirectsLeft - 1)
+          return
+        }
+        if (res.statusCode !== 200) {
+          res.resume()
+          fail(new Error(`Falha ao descarregar (${res.statusCode}) de ${u}.`))
+          return
+        }
+        res.on('error', fail)
+        res.pipe(file)
+        file.on('finish', () => file.close(() => done()))
+      })
+      req.setTimeout(DOWNLOAD_STALL_TIMEOUT_MS, () => {
+        req.destroy(
+          new Error(
+            `Sem resposta há ${DOWNLOAD_STALL_TIMEOUT_MS / 1000} segundos ao descarregar de ${new URL(u).host}. ` +
+              'Verifica a ligação à Internet e tenta outra vez — a instalação continua de onde ficou.',
+          ),
+        )
+      })
+      req.on('error', fail)
     }
     request(url, 5)
   })

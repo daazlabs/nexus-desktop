@@ -31,6 +31,33 @@ const PROVIDER_COLORS: Record<string, string> = {
   ovh: "#00a3ff", opencodezen: "#6366f1",
 }
 
+// The one-click connectors (AutoCAD, Photoshop, Premiere) download a private
+// Python runtime on first connect — a few minutes and a few dozen MB. Say so
+// up front, and name the folder, so nobody is surprised by the wait and
+// anyone can find the files to delete them later.
+function InstallInfo({ lang, what, dir }: { lang: Lang; what: string; dir: string }) {
+  if (!dir) return null
+  return (
+    <details className="text-xs text-muted-foreground">
+      <summary className="cursor-pointer hover:text-foreground transition-colors">
+        {lang === "pt" ? "O que vai ser instalado, e onde?" : "What gets installed, and where?"}
+      </summary>
+      <div className="mt-2 space-y-1.5 border-l border-border pl-3 leading-relaxed">
+        <p>{what}</p>
+        <p>
+          {lang === "pt" ? "Fica em:" : "It goes in:"}{" "}
+          <code className="font-mono text-[11px] text-foreground/80 break-all">{dir}</code>
+        </p>
+        <p>
+          {lang === "pt"
+            ? "Podes apagar esta pasta quando quiseres para libertar espaço — a app volta a preparar tudo da próxima vez que ligares."
+            : "You can delete that folder any time to free up space — the app sets everything up again next time you connect."}
+        </p>
+      </div>
+    </details>
+  )
+}
+
 interface Props {
   lang: Lang
   themeColor: string
@@ -67,14 +94,15 @@ export default function SettingsPage({ lang, themeColor, setThemeColor, onNaviga
   const [mcpTesting, setMcpTesting] = useState<string | null>(null)
   const [mcpTestResult, setMcpTestResult] = useState<Record<string, { ok: boolean; error?: string; toolCount?: number }>>({})
 
-  const [autocadStatus, setAutocadStatus] = useState<{ supported: boolean; provisioned: boolean; connected: boolean } | null>(null)
+  const [autocadStatus, setAutocadStatus] = useState<{ supported: boolean; provisioned: boolean; connected: boolean; installDir: string } | null>(null)
   const [autocadInstalling, setAutocadInstalling] = useState(false)
   const [autocadProgress, setAutocadProgress] = useState<{ step: string; pct: number } | null>(null)
   const [autocadError, setAutocadError] = useState<string | null>(null)
 
   const [photoshopStatus, setPhotoshopStatus] = useState<{
     supported: boolean; provisioned: boolean; proxyRunning: boolean
-    mcpConnected: boolean; pluginConnected: boolean; connected: boolean
+    mcpConnected: boolean; pluginConnected: boolean; connected: boolean; installDir: string
+    pluginInstallerError?: string
   } | null>(null)
   const [photoshopInstalling, setPhotoshopInstalling] = useState(false)
   const [photoshopProgress, setPhotoshopProgress] = useState<{ step: string; pct: number } | null>(null)
@@ -83,7 +111,8 @@ export default function SettingsPage({ lang, themeColor, setThemeColor, onNaviga
 
   const [premiereStatus, setPremiereStatus] = useState<{
     supported: boolean; provisioned: boolean; proxyRunning: boolean
-    mcpConnected: boolean; pluginConnected: boolean; connected: boolean
+    mcpConnected: boolean; pluginConnected: boolean; connected: boolean; installDir: string
+    pluginInstallerError?: string
   } | null>(null)
   const [premiereInstalling, setPremiereInstalling] = useState(false)
   const [premiereProgress, setPremiereProgress] = useState<{ step: string; pct: number } | null>(null)
@@ -238,6 +267,14 @@ export default function SettingsPage({ lang, themeColor, setThemeColor, onNaviga
       setConnectorSaving(null)
     }
   }
+
+  const autocadInstallWhat = lang === "pt"
+    ? "Um Python portátil só para a app, mais as bibliotecas pywin32, mcp e pydantic — cerca de 40 MB, 1 a 3 minutos na primeira vez. Não mexe em nenhum Python que já tenhas instalado."
+    : "A portable Python just for the app, plus the pywin32, mcp and pydantic libraries — about 40 MB, 1 to 3 minutes the first time. It doesn't touch any Python you already have."
+
+  const adobeInstallWhat = (appName: string) => lang === "pt"
+    ? `O gestor de Python (uv), o servidor de ligação e o plugin do ${appName} — cerca de 100 MB, 2 a 5 minutos na primeira vez. O Photoshop e o Premiere partilham os mesmos ficheiros, por isso o segundo é muito mais rápido.`
+    : `The Python manager (uv), the connection server and the ${appName} plugin — about 100 MB, 2 to 5 minutes the first time. Photoshop and Premiere share the same files, so the second one is much quicker.`
 
   const installAutocad = () => {
     setAutocadInstalling(true)
@@ -575,12 +612,15 @@ export default function SettingsPage({ lang, themeColor, setThemeColor, onNaviga
                   : "Windows only — AutoCAD is controlled via COM automation, which doesn't exist on macOS/Linux."}
               </p>
             ) : autocadStatus?.connected ? (
-              <button
-                onClick={() => disconnectConnector("autocad")}
-                disabled={connectorSaving === "autocad"}
-                className="text-xs text-muted-foreground hover:text-destructive transition-colors disabled:opacity-50">
-                {lang === "pt" ? "Desligar" : "Disconnect"}
-              </button>
+              <div className="space-y-2">
+                <button
+                  onClick={() => disconnectConnector("autocad")}
+                  disabled={connectorSaving === "autocad"}
+                  className="text-xs text-muted-foreground hover:text-destructive transition-colors disabled:opacity-50">
+                  {lang === "pt" ? "Desligar" : "Disconnect"}
+                </button>
+                <InstallInfo lang={lang} what={autocadInstallWhat} dir={autocadStatus.installDir} />
+              </div>
             ) : (
               <div className="space-y-2">
                 <p className="text-xs text-muted-foreground leading-relaxed">
@@ -588,6 +628,7 @@ export default function SettingsPage({ lang, themeColor, setThemeColor, onNaviga
                     ? "Abre o AutoCAD e clica em Ligar. Na primeira vez demora um pouco (a app prepara tudo sozinha) — nada para instalar ou configurar à mão."
                     : "Open AutoCAD, then click Connect. The first time takes a little while (the app sets everything up on its own) — nothing to install or configure by hand."}
                 </p>
+                <InstallInfo lang={lang} what={autocadInstallWhat} dir={autocadStatus?.installDir ?? ""} />
                 <button
                   onClick={installAutocad}
                   disabled={autocadInstalling}
@@ -621,12 +662,15 @@ export default function SettingsPage({ lang, themeColor, setThemeColor, onNaviga
                   : "macOS and Windows (64-bit) only."}
               </p>
             ) : photoshopStatus?.connected ? (
-              <button
-                onClick={disconnectPhotoshop}
-                disabled={photoshopDisconnecting}
-                className="text-xs text-muted-foreground hover:text-destructive transition-colors disabled:opacity-50">
-                {lang === "pt" ? "Desligar" : "Disconnect"}
-              </button>
+              <div className="space-y-2">
+                <button
+                  onClick={disconnectPhotoshop}
+                  disabled={photoshopDisconnecting}
+                  className="text-xs text-muted-foreground hover:text-destructive transition-colors disabled:opacity-50">
+                  {lang === "pt" ? "Desligar" : "Disconnect"}
+                </button>
+                <InstallInfo lang={lang} what={adobeInstallWhat("Photoshop")} dir={photoshopStatus.installDir} />
+              </div>
             ) : photoshopInstalling ? (
               <div className="space-y-2">
                 <button
@@ -642,6 +686,7 @@ export default function SettingsPage({ lang, themeColor, setThemeColor, onNaviga
                     <p className="text-xs text-muted-foreground">{photoshopProgress.step}</p>
                   </div>
                 )}
+                <InstallInfo lang={lang} what={adobeInstallWhat("Photoshop")} dir={photoshopStatus?.installDir ?? ""} />
                 {photoshopError && <p className="text-xs text-red-400">{photoshopError}</p>}
               </div>
             ) : photoshopStatus?.provisioned && photoshopStatus?.proxyRunning && photoshopStatus?.mcpConnected ? (
@@ -655,6 +700,13 @@ export default function SettingsPage({ lang, themeColor, setThemeColor, onNaviga
                   <span className="inline-block h-2 w-2 rounded-full bg-amber-400 animate-pulse" />
                   {lang === "pt" ? "A verificar a ligação…" : "Checking connection…"}
                 </div>
+                {photoshopStatus?.pluginInstallerError && (
+                  <p className="text-xs text-amber-400 leading-relaxed">
+                    {lang === "pt"
+                      ? "O instalador do plugin não chegou a abrir. Isso costuma querer dizer que falta o Creative Cloud Desktop, que é quem abre ficheiros .ccx — instala-o, ou abre o ficheiro à mão pelo link abaixo."
+                      : "The plugin installer never opened. That usually means Creative Cloud Desktop is missing — it's what opens .ccx files. Install it, or open the file by hand with the link below."}
+                  </p>
+                )}
                 <button
                   onClick={() => api.showPhotoshopInstaller()}
                   className="text-xs text-muted-foreground underline hover:text-foreground transition-colors">
@@ -669,6 +721,7 @@ export default function SettingsPage({ lang, themeColor, setThemeColor, onNaviga
                     ? "A app prepara tudo sozinha (Python, proxy). No fim abre-se o instalador do plugin — só falta abrir o Photoshop e clicar Connect no painel; detectamos a ligação automaticamente."
                     : "The app sets everything up on its own (Python, proxy). At the end the plugin installer opens — just open Photoshop and click Connect in the panel; we detect the connection automatically."}
                 </p>
+                <InstallInfo lang={lang} what={adobeInstallWhat("Photoshop")} dir={photoshopStatus?.installDir ?? ""} />
                 <button
                   onClick={installPhotoshop}
                   disabled={photoshopInstalling}
@@ -694,12 +747,15 @@ export default function SettingsPage({ lang, themeColor, setThemeColor, onNaviga
                   : "macOS and Windows (64-bit) only."}
               </p>
             ) : premiereStatus?.connected ? (
-              <button
-                onClick={disconnectPremiere}
-                disabled={premiereDisconnecting}
-                className="text-xs text-muted-foreground hover:text-destructive transition-colors disabled:opacity-50">
-                {lang === "pt" ? "Desligar" : "Disconnect"}
-              </button>
+              <div className="space-y-2">
+                <button
+                  onClick={disconnectPremiere}
+                  disabled={premiereDisconnecting}
+                  className="text-xs text-muted-foreground hover:text-destructive transition-colors disabled:opacity-50">
+                  {lang === "pt" ? "Desligar" : "Disconnect"}
+                </button>
+                <InstallInfo lang={lang} what={adobeInstallWhat("Premiere Pro")} dir={premiereStatus.installDir} />
+              </div>
             ) : premiereInstalling ? (
               <div className="space-y-2">
                 <button
@@ -715,6 +771,7 @@ export default function SettingsPage({ lang, themeColor, setThemeColor, onNaviga
                     <p className="text-xs text-muted-foreground">{premiereProgress.step}</p>
                   </div>
                 )}
+                <InstallInfo lang={lang} what={adobeInstallWhat("Premiere Pro")} dir={premiereStatus?.installDir ?? ""} />
                 {premiereError && <p className="text-xs text-red-400">{premiereError}</p>}
               </div>
             ) : premiereStatus?.provisioned && premiereStatus?.proxyRunning && premiereStatus?.mcpConnected ? (
@@ -728,6 +785,13 @@ export default function SettingsPage({ lang, themeColor, setThemeColor, onNaviga
                   <span className="inline-block h-2 w-2 rounded-full bg-amber-400 animate-pulse" />
                   {lang === "pt" ? "A verificar a ligação…" : "Checking connection…"}
                 </div>
+                {premiereStatus?.pluginInstallerError && (
+                  <p className="text-xs text-amber-400 leading-relaxed">
+                    {lang === "pt"
+                      ? "O instalador do plugin não chegou a abrir. Isso costuma querer dizer que falta o Creative Cloud Desktop, que é quem abre ficheiros .ccx — instala-o, ou abre o ficheiro à mão pelo link abaixo."
+                      : "The plugin installer never opened. That usually means Creative Cloud Desktop is missing — it's what opens .ccx files. Install it, or open the file by hand with the link below."}
+                  </p>
+                )}
                 <button
                   onClick={() => api.showPremiereInstaller()}
                   className="text-xs text-muted-foreground underline hover:text-foreground transition-colors">
@@ -742,6 +806,7 @@ export default function SettingsPage({ lang, themeColor, setThemeColor, onNaviga
                     ? "A app prepara tudo sozinha (Python, proxy). No fim abre-se o instalador do plugin — só falta abrir o Premiere e clicar Connect no painel; detectamos a ligação automaticamente."
                     : "The app sets everything up on its own (Python, proxy). At the end the plugin installer opens — just open Premiere and click Connect in the panel; we detect the connection automatically."}
                 </p>
+                <InstallInfo lang={lang} what={adobeInstallWhat("Premiere Pro")} dir={premiereStatus?.installDir ?? ""} />
                 <button
                   onClick={installPremiere}
                   disabled={premiereInstalling}

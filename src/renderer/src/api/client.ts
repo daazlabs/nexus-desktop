@@ -367,8 +367,20 @@ export const api = {
     return await nexusApi.connectors?.disconnect?.(connectorId)
   },
 
-  getAutocadStatus: async (): Promise<{ supported: boolean; provisioned: boolean; connected: boolean }> => {
-    return await nexusApi.connectors?.autocadStatus?.() || { supported: false, provisioned: false, connected: false }
+  getAutocadStatus: async (): Promise<{
+    supported: boolean
+    provisioned: boolean
+    connected: boolean
+    installDir: string
+  }> => {
+    return (
+      (await nexusApi.connectors?.autocadStatus?.()) || {
+        supported: false,
+        provisioned: false,
+        connected: false,
+        installDir: "",
+      }
+    )
   },
 
   installAutocad: (
@@ -385,6 +397,8 @@ export const api = {
     mcpConnected: boolean
     pluginConnected: boolean
     connected: boolean
+    installDir: string
+    pluginInstallerError?: string
   }> => {
     return (
       (await nexusApi.connectors?.photoshopStatus?.()) || {
@@ -394,6 +408,7 @@ export const api = {
         mcpConnected: false,
         pluginConnected: false,
         connected: false,
+        installDir: "",
       }
     )
   },
@@ -420,6 +435,8 @@ export const api = {
     mcpConnected: boolean
     pluginConnected: boolean
     connected: boolean
+    installDir: string
+    pluginInstallerError?: string
   }> => {
     return (
       (await nexusApi.connectors?.premiereStatus?.()) || {
@@ -429,6 +446,7 @@ export const api = {
         mcpConnected: false,
         pluginConnected: false,
         connected: false,
+        installDir: "",
       }
     )
   },
