@@ -27,6 +27,14 @@ extraResources:
   # same for every install.
   - from: skills
     to: skills
+  # OAuth "installed app" clients, one JSON per provider, written by CI from
+  # repo secrets (see release.yml) — never committed. Without these the
+  # Google/Canva connectors ship with no way to log in. Absent on a plain
+  # local build, which is fine: loadDesktopOAuthClient() then falls back to
+  # ~/.daaznexus/ as before.
+  - from: build-oauth
+    to: oauth-clients
+    filter: ['*-desktop-client.json']
   - from: ../mcp-servers/gdrive-server
     to: mcp-servers/gdrive-server
     filter: ['dist/**/*', 'package.json', 'node_modules/**/*']

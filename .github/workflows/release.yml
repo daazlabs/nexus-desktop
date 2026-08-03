@@ -110,6 +110,24 @@ jobs:
             (cd "../mcp-servers/$d" && npm ci && npm run build && npm prune --omit=dev)
           done
 
+      # One secret per provider, one file per provider — a missing or broken
+      # Google registration must not be able to break Canva too. Each holds
+      # the whole {"client_id": ..., "client_secret": ...} JSON, so adding a
+      # provider means adding a secret and a line here, nothing else.
+      - name: Bundle OAuth desktop clients
+        shell: bash
+        env:
+          GOOGLE_DESKTOP_CLIENT_JSON: ${{ secrets.GOOGLE_DESKTOP_CLIENT_JSON }}
+          CANVA_CLIENT_JSON: ${{ secrets.CANVA_CLIENT_JSON }}
+        run: |
+          mkdir -p build-oauth
+          if [ -n "$GOOGLE_DESKTOP_CLIENT_JSON" ]; then
+            printf '%s' "$GOOGLE_DESKTOP_CLIENT_JSON" > build-oauth/google-desktop-client.json
+          fi
+          if [ -n "$CANVA_CLIENT_JSON" ]; then
+            printf '%s' "$CANVA_CLIENT_JSON" > build-oauth/canva-desktop-client.json
+          fi
+
       # electron-builder only *warns* about missing extraResources, so a
       # broken bundle would silently ship again. Fail here instead.
       - name: Verify MCP servers are ready to bundle
@@ -123,6 +141,17 @@ jobs:
           done
           [ -e ../mcp-servers/adobe-server/mcp/ps-mcp.py ] || { echo "MISSING: mcp-servers/adobe-server/mcp/ps-mcp.py"; missing=1; }
           [ -e ../mcp-servers/autocad-server/src/server.py ] || { echo "MISSING: mcp-servers/autocad-server/src/server.py"; missing=1; }
+          # Same rule as the servers: shipping without these means the Google
+          # and Canva cards land dead ("not configured yet", no button) on
+          # every install, which is exactly the failure this check exists for.
+          for f in google-desktop-client canva-desktop-client; do
+            if grep -q '"client_id"' "build-oauth/$f.json" 2>/dev/null; then
+              echo "OK: oauth client $f"
+            else
+              echo "MISSING or invalid: build-oauth/$f.json (check the repo secret)"
+              missing=1
+            fi
+          done
           [ "$missing" -eq 0 ] || { echo "Aborting: connectors would be missing from the installer."; exit 1; }
           echo "All MCP servers present."
 

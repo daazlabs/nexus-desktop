@@ -4,3 +4,6 @@ dist-electron/
 src/renderer/dist/
 .env
 *.log
+# OAuth client JSONs written by CI from repo secrets (release.yml) and, if you
+# want, locally for testing a packaged build. Never committed.
+build-oauth/

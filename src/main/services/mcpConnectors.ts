@@ -47,19 +47,42 @@ interface ConnectorDef {
 // local file in the same user-data directory as the encryption vault key,
 // never from source. Whoever builds/packages the app places that file once,
 // the same way ENCRYPTION_KEY/.vault-key already works in keyVault.ts.
+// One file per provider, never a shared blob: a broken or missing Google
+// registration must not be able to take Canva down with it.
+function readClientFile(filePath: string): { clientId: string; clientSecret: string } | null {
+  try {
+    const raw = JSON.parse(fs.readFileSync(filePath, 'utf-8'))
+    if (!raw.client_id) return null
+    return { clientId: raw.client_id, clientSecret: raw.client_secret || '' }
+  } catch {
+    return null
+  }
+}
+
+// Three sources, most specific first:
+//   1. env vars           — dev override, nothing on disk
+//   2. ~/.daaznexus/…     — per-machine override (e.g. someone using their
+//                           own Google Cloud project instead of ours)
+//   3. app resources      — the defaults every install ships with, written
+//                           by CI from repo secrets (see release.yml).
+// Source 3 is what makes the connectors work out of the box: an OAuth client
+// for an "installed app" is designed to travel inside the app — Google's own
+// docs say the secret of a Desktop client "is obviously not treated as a
+// secret". Each user still does their own login; this only identifies the app.
 function loadDesktopOAuthClient(providerId: string, envPrefix: string): { clientId: string; clientSecret: string } {
   const idVar = `${envPrefix}_CLIENT_ID`
   const secretVar = `${envPrefix}_CLIENT_SECRET`
   if (process.env[idVar]) {
     return { clientId: process.env[idVar]!, clientSecret: process.env[secretVar] || '' }
   }
-  try {
-    const configPath = path.join(process.env.HOME || process.env.USERPROFILE || '.', '.daaznexus', `${providerId}-desktop-client.json`)
-    const raw = JSON.parse(fs.readFileSync(configPath, 'utf-8'))
-    return { clientId: raw.client_id || '', clientSecret: raw.client_secret || '' }
-  } catch {
-    return { clientId: '', clientSecret: '' }
-  }
+  const fileName = `${providerId}-desktop-client.json`
+  const home = process.env.HOME || process.env.USERPROFILE || '.'
+  const userFile = readClientFile(path.join(home, '.daaznexus', fileName))
+  if (userFile) return userFile
+  const bundledDir = app.isPackaged
+    ? path.join(process.resourcesPath, 'oauth-clients')
+    : path.join(REPO_ROOT, 'nexus-desktop', 'build-oauth')
+  return readClientFile(path.join(bundledDir, fileName)) || { clientId: '', clientSecret: '' }
 }
 
 const { clientId: GOOGLE_DESKTOP_CLIENT_ID, clientSecret: GOOGLE_DESKTOP_CLIENT_SECRET } = loadDesktopOAuthClient('google', 'GOOGLE_DESKTOP')
