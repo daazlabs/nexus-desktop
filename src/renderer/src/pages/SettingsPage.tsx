@@ -31,6 +31,60 @@ const PROVIDER_COLORS: Record<string, string> = {
   ovh: "#00a3ff", opencodezen: "#6366f1",
 }
 
+// Things the user must already have and that the app cannot install for
+// them. Shown on the card *before* setup starts — finding out after a
+// five-minute download that something external was missing all along is the
+// worst way to learn it. New connectors with an external dependency: add an
+// entry here; connectors that need nothing outside the app stay absent.
+const CONNECTOR_REQUIREMENTS: Record<string, Record<Lang, string[]>> = {
+  autocad: {
+    pt: [
+      "AutoCAD instalado no Windows e aberto quando ligares (o Nexus comanda a janela que estiver aberta).",
+    ],
+    en: [
+      "AutoCAD installed on Windows and open when you connect (Nexus drives whichever window is open).",
+    ],
+  },
+  // Versions per the adb-mcp README at the pinned tag v0.85.4. Premiere's UXP
+  // support only exists in the Beta build — the regular release won't load
+  // the plugin, which is the kind of thing that costs an hour to discover.
+  photoshop: {
+    pt: [
+      "Creative Cloud Desktop instalado — é ele que instala o plugin (o ficheiro .ccx).",
+      "Photoshop 26.0 (2025) ou mais recente, para suportar plugins UXP.",
+    ],
+    en: [
+      "Creative Cloud Desktop installed — it's what installs the plugin (the .ccx file).",
+      "Photoshop 26.0 (2025) or newer, for UXP plugin support.",
+    ],
+  },
+  premiere: {
+    pt: [
+      "Creative Cloud Desktop instalado — é ele que instala o plugin (o ficheiro .ccx).",
+      "Premiere Pro Beta 25.3 (build 46) ou mais recente. Tem mesmo de ser a versão Beta: a versão normal do Premiere ainda não carrega plugins UXP.",
+    ],
+    en: [
+      "Creative Cloud Desktop installed — it's what installs the plugin (the .ccx file).",
+      "Premiere Pro Beta 25.3 (build 46) or newer. It has to be the Beta build: regular Premiere doesn't load UXP plugins yet.",
+    ],
+  },
+}
+
+function Requirements({ lang, id }: { lang: Lang; id: string }) {
+  const items = CONNECTOR_REQUIREMENTS[id]?.[lang]
+  if (!items?.length) return null
+  return (
+    <div className="rounded-lg border border-border/70 bg-muted/30 px-3 py-2">
+      <p className="mb-1 text-xs font-medium text-foreground/80">
+        {lang === "pt" ? "Precisas de ter:" : "You'll need:"}
+      </p>
+      <ul className="list-disc space-y-0.5 pl-4 text-xs text-muted-foreground leading-relaxed">
+        {items.map((item) => <li key={item}>{item}</li>)}
+      </ul>
+    </div>
+  )
+}
+
 // The one-click connectors (AutoCAD, Photoshop, Premiere) download a private
 // Python runtime on first connect — a few minutes and a few dozen MB. Say so
 // up front, and name the folder, so nobody is surprised by the wait and
@@ -628,6 +682,7 @@ export default function SettingsPage({ lang, themeColor, setThemeColor, onNaviga
                     ? "Abre o AutoCAD e clica em Ligar. Na primeira vez demora um pouco (a app prepara tudo sozinha) — nada para instalar ou configurar à mão."
                     : "Open AutoCAD, then click Connect. The first time takes a little while (the app sets everything up on its own) — nothing to install or configure by hand."}
                 </p>
+                <Requirements lang={lang} id="autocad" />
                 <InstallInfo lang={lang} what={autocadInstallWhat} dir={autocadStatus?.installDir ?? ""} />
                 <button
                   onClick={installAutocad}
@@ -721,6 +776,7 @@ export default function SettingsPage({ lang, themeColor, setThemeColor, onNaviga
                     ? "A app prepara tudo sozinha (Python, proxy). No fim abre-se o instalador do plugin — só falta abrir o Photoshop e clicar Connect no painel; detectamos a ligação automaticamente."
                     : "The app sets everything up on its own (Python, proxy). At the end the plugin installer opens — just open Photoshop and click Connect in the panel; we detect the connection automatically."}
                 </p>
+                <Requirements lang={lang} id="photoshop" />
                 <InstallInfo lang={lang} what={adobeInstallWhat("Photoshop")} dir={photoshopStatus?.installDir ?? ""} />
                 <button
                   onClick={installPhotoshop}
@@ -806,6 +862,7 @@ export default function SettingsPage({ lang, themeColor, setThemeColor, onNaviga
                     ? "A app prepara tudo sozinha (Python, proxy). No fim abre-se o instalador do plugin — só falta abrir o Premiere e clicar Connect no painel; detectamos a ligação automaticamente."
                     : "The app sets everything up on its own (Python, proxy). At the end the plugin installer opens — just open Premiere and click Connect in the panel; we detect the connection automatically."}
                 </p>
+                <Requirements lang={lang} id="premiere" />
                 <InstallInfo lang={lang} what={adobeInstallWhat("Premiere Pro")} dir={premiereStatus?.installDir ?? ""} />
                 <button
                   onClick={installPremiere}
