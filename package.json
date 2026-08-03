@@ -1,6 +1,6 @@
 {
   "name": "nexus-desktop",
-  "version": "1.0.25",
+  "version": "1.0.26",
   "description": "DaazNexus Desktop — Electron client",
   "desktopName": "com.daazlabs.DaazNexus",
   "main": "dist-electron/main/index.js",
