@@ -627,7 +627,7 @@ export default function SettingsPage({ lang, themeColor, setThemeColor, onNaviga
                       onClick={() => connectOAuth(c.id)}
                       disabled={connectorSaving === c.id}
                       className="bg-primary text-primary-foreground rounded-full px-4 py-2 font-medium text-sm hover:opacity-90 disabled:opacity-50 transition-opacity">
-                      {lang === "pt" ? `Ligar com ${c.name}` : `Connect with ${c.name}`}
+                      {lang === "pt" ? "Ligar" : `Connect with ${c.name}`}
                     </button>
                   )
                 ) : (

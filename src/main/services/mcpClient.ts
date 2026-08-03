@@ -35,10 +35,26 @@ export async function connectStdio(
   env?: Record<string, string>,
   cwd?: string,
 ): Promise<McpConnection> {
-  const transport = new StdioClientTransport({ command, args, env, cwd })
-  const client = new Client({ name: 'daaznexus-desktop', version: '1.0.0' })
-  await client.connect(transport)
-  return { serverId, client, lastUsed: Date.now() }
+  // stderr defaults to "inherit", which in a packaged app means the server's
+  // own error messages vanish into a console nobody can see — leaving only
+  // the SDK's useless "Connection closed" when a server dies at startup.
+  // Piping it lets the caller show the real reason (missing module, bad
+  // credential, crash trace) in the connector card.
+  const transport = new StdioClientTransport({ command, args, env, cwd, stderr: 'pipe' })
+  let stderrTail = ''
+  transport.stderr?.on('data', (chunk: Buffer) => {
+    stderrTail = (stderrTail + chunk.toString()).slice(-2000)
+  })
+  try {
+    const client = new Client({ name: 'daaznexus-desktop', version: '1.0.0' })
+    await client.connect(transport)
+    return { serverId, client, lastUsed: Date.now() }
+  } catch (e) {
+    const detail = stderrTail.trim()
+    if (!detail) throw e
+    const msg = e instanceof Error ? e.message : String(e)
+    throw new Error(`${msg}\n${detail}`)
+  }
 }
 
 export async function listTools(conn: McpConnection): Promise<{ name: string; description?: string; inputSchema: any }[]> {
