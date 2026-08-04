@@ -11,6 +11,7 @@ import MemoriesPage from "./pages/MemoriesPage"
 import SkillsPage from "./pages/SkillsPage"
 import FAQPage from "./pages/FAQPage"
 import PermissionModal from "./components/PermissionModal"
+import { api } from "./api/client"
 
 const LANG_KEY = "daaznexus-lang"
 
@@ -46,6 +47,17 @@ export default function App() {
     return () => cleanupRef.current?.()
   }, [])
 
+  // Auto-learned facts arrive from main (services/memoryExtraction.ts) after
+  // any exchange, on any page — kept at this level (not inside ChatPage) so
+  // it isn't tied to the chat UI being the active page. api.addMemory does
+  // the dedup, so a repeated stable fact across many conversations is only
+  // ever stored once.
+  useEffect(() => {
+    return api.onMemoriesLearned((facts) => {
+      facts.forEach((fact) => { api.addMemory(fact).catch(() => null) })
+    })
+  }, [])
+
   const handlePermission = (req: PermissionRequest, granted: boolean) => {
     const nexus = (window as any).nexus
     nexus?.permissions?.respond?.(req.id, granted)
@@ -56,57 +68,43 @@ export default function App() {
     <PermissionModal reqs={[permReq]} onRespond={handlePermission} />
   ) : null
 
-  if (page === "settings") return (
-    <>
-      {permModal}
-      <SettingsPage lang={lang} themeColor={themeColor} setThemeColor={setThemeColor} onNavigate={setPage} />
-    </>
-  )
-
-  if (page === "analytics") return (
-    <>
-      {permModal}
-      <AnalyticsPage onNavigate={setPage} lang={lang} />
-    </>
-  )
-
-  if (page === "memories") return (
-    <>
-      {permModal}
-      <MemoriesPage lang={lang} onNavigate={setPage} />
-    </>
-  )
-
-  if (page === "skills") return (
-    <>
-      {permModal}
-      <SkillsPage lang={lang} onNavigate={setPage} />
-    </>
-  )
-
-  if (page === "faq") return (
-    <>
-      {permModal}
-      <FAQPage lang={lang} onNavigate={setPage} />
-    </>
-  )
-
+  // ChatPage used to be conditionally rendered (early-return per page, like
+  // the branches below) — which meant navigating to any other page unmounted
+  // it, wiping activeStreamsRef/convId/messages and orphaning any in-flight
+  // stream mid-response. It now stays mounted permanently and is only
+  // hidden with CSS, so a response keeps streaming (and lands) even while
+  // the user is looking at Settings/Analytics/etc. `display: contents` when
+  // visible means the wrapper adds no box of its own, so ChatPage's own
+  // `h-screen` root behaves exactly as if it were the direct child here.
   return (
-    <ErrorBoundary>
-      {/* No {permModal} here: ChatPage renders its own PermissionModal (a
-          queue that supports several concurrent requests and clears itself
-          on "resolved"). Showing this simpler one too meant both received
-          the same request and both stayed mounted — clicking one resolved
-          it on the backend, but the other lingered with stale state and,
-          if clicked, sent a second (harmless but noisy) resolve for an
-          already-resolved id. */}
-      <ChatPage
-        onNavigate={setPage}
-        colorMode={colorMode}
-        setColorMode={setColorMode}
-        lang={lang}
-        setLang={setLang}
-      />
-    </ErrorBoundary>
+    <>
+      {/* No permModal here while chat is the visible page: ChatPage renders
+          its own PermissionModal (a queue that supports several concurrent
+          requests and clears itself on "resolved"). Showing this simpler one
+          too meant both received the same request and both stayed mounted —
+          clicking one resolved it on the backend, but the other lingered
+          with stale state and, if clicked, sent a second (harmless but
+          noisy) resolve for an already-resolved id. */}
+      {page !== "chat" && permModal}
+      <div style={{ display: page === "chat" ? "contents" : "none" }}>
+        <ErrorBoundary>
+          <ChatPage
+            active={page === "chat"}
+            onNavigate={setPage}
+            colorMode={colorMode}
+            setColorMode={setColorMode}
+            lang={lang}
+            setLang={setLang}
+          />
+        </ErrorBoundary>
+      </div>
+      {page === "settings" && (
+        <SettingsPage lang={lang} themeColor={themeColor} setThemeColor={setThemeColor} onNavigate={setPage} />
+      )}
+      {page === "analytics" && <AnalyticsPage onNavigate={setPage} lang={lang} />}
+      {page === "memories" && <MemoriesPage lang={lang} onNavigate={setPage} />}
+      {page === "skills" && <SkillsPage lang={lang} onNavigate={setPage} />}
+      {page === "faq" && <FAQPage lang={lang} onNavigate={setPage} />}
+    </>
   )
 }

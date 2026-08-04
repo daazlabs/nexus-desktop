@@ -243,12 +243,25 @@ export const api = {
     } catch { return { memories: [], total: 0 } }
   },
 
-  addMemory: async (fact: string): Promise<{ id: number; fact: string; created_at: string }> => {
+  addMemory: async (fact: string): Promise<{ id: number; fact: string; created_at: string } | null> => {
+    const trimmed = fact.trim()
     const { memories } = await api.listMemories()
-    const m = { id: Date.now(), fact: fact.trim(), created_at: new Date().toISOString() }
+    // Case-insensitive dedup — matters now that facts can also arrive
+    // automatically (see onMemoriesLearned) after every exchange; without
+    // this the same stable fact ("trabalha em TypeScript") would pile up
+    // once per conversation instead of being recorded once.
+    if (memories.some(m => m.fact.trim().toLowerCase() === trimmed.toLowerCase())) return null
+    const m = { id: Date.now(), fact: trimmed, created_at: new Date().toISOString() }
     memories.unshift(m)
     localStorage.setItem(MEMORIES_KEY, JSON.stringify(memories))
     return m
+  },
+
+  // Subscribe to main-process notifications that background extraction
+  // (services/memoryExtraction.ts) found new facts after a chat exchange.
+  // Returns an unsubscribe function.
+  onMemoriesLearned: (callback: (facts: string[]) => void): (() => void) => {
+    return (window as any).nexus?.memory?.onLearned?.(callback) ?? (() => {})
   },
 
   deleteMemory: async (id: number): Promise<{ detail: string }> => {

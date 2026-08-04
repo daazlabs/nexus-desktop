@@ -11,6 +11,7 @@ import type { CustomMcpServerConfig } from '../services/customMcpServers.js'
 import { maybeEnrichWithWeb } from '../services/webSearch.js'
 import * as skills from '../tools/skills.js'
 import type { ChatMessage } from '../services/providerClients.js'
+import { extractMemories, summarizeToolEvent } from '../services/memoryExtraction.js'
 
 const activeStreams = new Map<string, boolean>()
 
@@ -310,8 +311,8 @@ export function registerIpcHandlers(): void {
   })
 
   ipcMain.handle('nexus:connectors:list', () => mcpConnectors.listConnectors())
-  ipcMain.handle('nexus:connectors:setToken', (_event, connectorId: string, token: string) => {
-    mcpConnectors.setConnectorToken(connectorId, token)
+  ipcMain.handle('nexus:connectors:setToken', async (_event, connectorId: string, token: string) => {
+    await mcpConnectors.setConnectorToken(connectorId, token)
     return mcpConnectors.listConnectors()
   })
   ipcMain.handle('nexus:connectors:disconnect', async (_event, connectorId: string) => {
@@ -438,9 +439,16 @@ export function registerIpcHandlers(): void {
     activeStreams.set(id, true)
     let fullContent = ''
     let usedModel = ''
+    // Compact digest of BUILD-mode tool calls in this exchange (path/command
+    // touched, never full results) — fed into memory extraction below so it
+    // can pick up on "trabalha no projecto X" from what was actually done,
+    // not just what was said. See services/memoryExtraction.ts.
+    const toolSummaries: string[] = []
     const notifyTool = (ev: any) => {
       const chunk = `__TOOL_EVENT__:${JSON.stringify(ev)}`
       event.sender.send('nexus:stream:chunk', { id, chunk })
+      const summary = summarizeToolEvent(ev)
+      if (summary) toolSummaries.push(summary)
     }
     // PLAN mode (default) vs BUILD mode: tools are only attached in BUILD.
     const toolsEnabled = options?.toolsEnabled === true
@@ -482,6 +490,24 @@ export function registerIpcHandlers(): void {
       }
       activeStreams.delete(id)
       event.sender.send('nexus:stream:done', { id, result: { content: fullContent, model: usedModel } })
+      // Fire-and-forget: never await this, never let it delay or break the
+      // reply the user is waiting for. Dedup against what's already stored
+      // happens renderer-side (api.addMemory) — the renderer, not main, owns
+      // that localStorage-backed list, so main doesn't try to read it here.
+      const lastUserMsg = [...messages].reverse().find((m) => m.role === 'user')?.content
+      if (lastUserMsg && fullContent) {
+        extractMemories({
+          userMsg: String(lastUserMsg),
+          assistantMsg: fullContent,
+          toolSummary: toolSummaries.length ? toolSummaries.join('\n') : undefined,
+          existingFacts: [],
+          lang: options?.lang,
+        })
+          .then((facts) => {
+            if (facts.length) event.sender.send('nexus:memory:learned', { facts })
+          })
+          .catch((e) => console.warn('[memory] extraction failed:', e?.message || e))
+      }
     } catch (err: any) {
       activeStreams.delete(id)
       event.sender.send('nexus:stream:error', { id, error: err?.message || 'Stream failed' })

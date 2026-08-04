@@ -23,6 +23,13 @@ interface AttachedFile {
   content?: string
 }
 
+// Remembers which conversation was open so relaunching the app (or, before
+// the ChatPage-stays-mounted fix, navigating to another page and back) lands
+// back where the user actually was — not on `convs[0]`, which is the OLDEST
+// conversation (createConversation appends, never unshifts) and was getting
+// picked by mistake any time convIdRef was empty at mount time.
+const LAST_CONV_KEY = "nexus-last-conv-id"
+
 const TEXT_EXTS = new Set(["txt","md","json","py","js","ts","tsx","jsx","html","css","sql","csv","yml","yaml","sh","xml","toml","ini","env","log","rb","go","rs","java","c","cpp","h","php","kt","swift"])
 const IMG_EXTS = new Set(["jpg","jpeg","png","gif","webp","svg","bmp"])
 
@@ -160,6 +167,11 @@ function ProjectPromptModal({ lang, project, onSave, onClose }: { lang: Lang; pr
 }
 
 interface Props {
+  // True while ChatPage is the visible page. It now stays mounted (hidden
+  // via CSS, not unmounted) when the user navigates elsewhere, so in-flight
+  // streams survive — see App.tsx. Used only to keep background-page global
+  // listeners (keyboard shortcuts) from firing while hidden.
+  active: boolean
   onNavigate: (p: Page) => void
   colorMode: "dark" | "light"
   setColorMode: (m: "dark" | "light") => void
@@ -177,7 +189,7 @@ interface ActiveStream {
   content: string
 }
 
-export default function ChatPage({ onNavigate, colorMode, setColorMode, lang, setLang }: Props) {
+export default function ChatPage({ active, onNavigate, colorMode, setColorMode, lang, setLang }: Props) {
   const [convs, setConvs] = useState<{ id: number; title: string; project_id?: number }[]>([])
   const [messages, setMessages] = useState<Message[]>([])
   const [projects, setProjects] = useState<Project[]>([])
@@ -243,6 +255,11 @@ export default function ChatPage({ onNavigate, colorMode, setColorMode, lang, se
   const activeConvIds = new Set(activeStreamsRef.current.keys())
 
   useEffect(() => { mountedRef.current = true; return () => { mountedRef.current = false } }, [])
+  // Single source of truth for "which conversation was open" — every path
+  // that switches conversation (switchConv, newConv, the auto-create on
+  // first message, deleteConv's fallback) already updates `convId`, so
+  // watching it here beats re-deriving the same write in each of those.
+  useEffect(() => { if (convId != null) localStorage.setItem(LAST_CONV_KEY, String(convId)) }, [convId])
   useEffect(() => { messagesRef.current = messages }, [messages])
   useEffect(() => { convsRef.current = convs }, [convs])
 
@@ -511,12 +528,20 @@ export default function ChatPage({ onNavigate, colorMode, setColorMode, lang, se
   useEffect(() => {
     (async () => {
       const list = await loadConvs()
-      if (!list || list.length === 0) await newConv()
-      else if (!convIdRef.current) await switchConv(list[0].id)
+      if (!list || list.length === 0) { await newConv(); return }
+      if (convIdRef.current) return
+      const savedId = Number(localStorage.getItem(LAST_CONV_KEY))
+      const target = list.find(c => c.id === savedId) ?? list[list.length - 1]
+      await switchConv(target.id)
     })()
   }, [])
 
   useEffect(() => {
+    // ChatPage now stays mounted while hidden behind Settings/Analytics/etc.
+    // (see App.tsx) so these global shortcuts must not fire on that
+    // background instance — e.g. Ctrl+K would otherwise silently spawn a new
+    // conversation while the user is looking at a completely different page.
+    if (!active) return
     const handler = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement).tagName
       const isInput = tag === "INPUT" || tag === "TEXTAREA"
@@ -528,7 +553,7 @@ export default function ChatPage({ onNavigate, colorMode, setColorMode, lang, se
     }
     window.addEventListener("keydown", handler)
     return () => window.removeEventListener("keydown", handler)
-  }, [artifact, exportOpen, newConv])
+  }, [active, artifact, exportOpen, newConv])
 
   useEffect(() => {
     if (!streamingContent) return
@@ -580,6 +605,20 @@ export default function ChatPage({ onNavigate, colorMode, setColorMode, lang, se
     setMessages([...currentMessages, userMsg, { id: placeholderId, role: "assistant", content: "" }])
 
     const ipcMessages: { role: string; content: string }[] = []
+    // Inject persistent memories (see services/memoryExtraction.ts, main
+    // process) the same way the web app does in ws.py — otherwise a fact
+    // could be learned and stored perfectly and still never once change how
+    // the model responds, which is what was actually happening here before:
+    // the "Memórias" page existed and described itself as always-on context,
+    // but nothing ever read it back into a conversation.
+    const { memories } = await api.listMemories().catch(() => ({ memories: [] as { fact: string }[] }))
+    if (memories.length) {
+      const facts = memories.slice(0, 30).map(m => `- ${m.fact}`).join("\n")
+      ipcMessages.push({
+        role: "system",
+        content: `${lang === "pt" ? "O que sabes sobre o utilizador (memórias persistentes)" : "What you know about the user (persistent memories)"}:\n${facts}`,
+      })
+    }
     if (systemPrompt) ipcMessages.push({ role: "system", content: systemPrompt })
     for (const m of currentMessages.filter(m => m.role !== "system")) {
       ipcMessages.push({ role: m.role, content: m.content })

@@ -24,6 +24,17 @@ const api = {
       return () => ipcRenderer.removeListener('nexus:permission:resolved', handler)
     },
   },
+  memory: {
+    // Fired by main after a stream finishes, once background extraction
+    // (services/memoryExtraction.ts) finds new facts — never blocks the
+    // reply itself. Renderer decides what to do with them (client.ts merges
+    // into the same localStorage list the manual "Memórias" page uses).
+    onLearned: (callback: (facts: string[]) => void) => {
+      const handler = (_: any, data: { facts: string[] }) => callback(data.facts)
+      ipcRenderer.on('nexus:memory:learned', handler)
+      return () => ipcRenderer.removeListener('nexus:memory:learned', handler)
+    },
+  },
   connectors: {
     list: () => ipcRenderer.invoke('nexus:connectors:list'),
     setToken: (connectorId: string, token: string) =>

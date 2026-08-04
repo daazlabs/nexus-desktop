@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react"
+import { useState, useEffect, type ReactNode } from "react"
 import { api } from "../api/client"
 import type { CategorizedProvider } from "../types"
 import type { Page } from "../constants"
@@ -112,6 +112,300 @@ function InstallInfo({ lang, what, dir }: { lang: Lang; what: string; dir: strin
   )
 }
 
+// Presentational only — deliberately kept separate from the functional
+// connector registry in main (mcpConnectors.ts CONNECTOR_DEFS). Adding a
+// connector there makes it show up here automatically (via listConnectors),
+// even before it gets an entry below: connectorChip() falls back to the
+// name's initials on a neutral background, so nothing ever renders blank
+// while waiting for a nicer chip.
+const CONNECTOR_CHIPS: Record<string, { label: string; bg: string }> = {
+  github: { label: "GH", bg: "#181717" },
+  gdrive: { label: "GD", bg: "linear-gradient(135deg,#4285F4,#34A853)" },
+  gmail: { label: "GM", bg: "linear-gradient(135deg,#EA4335,#FBBC05)" },
+  canva: { label: "Cv", bg: "linear-gradient(135deg,#7d2ae8,#00c4cc)" },
+  wordpress: { label: "Wp", bg: "#21759B" },
+  n8n: { label: "n8n", bg: "#EA4B71" },
+  magnific: { label: "Mg", bg: "#6c5ce7" },
+  autocad: { label: "Ac", bg: "#C6282E" },
+  photoshop: { label: "Ps", bg: "#31A8FF" },
+  premiere: { label: "Pr", bg: "linear-gradient(135deg,#00005B,#9999FF)" },
+}
+function connectorChip(id: string, name: string): { label: string; bg: string } {
+  return CONNECTOR_CHIPS[id] || { label: name.slice(0, 2).toUpperCase(), bg: "#6b7280" }
+}
+
+function ChipIcon({ id, name }: { id: string; name: string }) {
+  const chip = connectorChip(id, name)
+  return (
+    <div
+      className="w-9 h-9 rounded-lg flex items-center justify-center text-white text-[11px] font-bold shrink-0"
+      style={{ background: chip.bg }}>
+      {chip.label}
+    </div>
+  )
+}
+
+function StatusPill({ lang, connected }: { lang: Lang; connected: boolean }) {
+  return connected ? (
+    <span className="inline-flex items-center gap-1 bg-green-500/15 text-green-400 border border-green-500/30 rounded-full px-2.5 py-0.5 text-xs font-medium shrink-0">
+      {lang === "pt" ? "Ligado" : "Connected"}
+    </span>
+  ) : (
+    <span className="text-xs text-muted-foreground shrink-0">{lang === "pt" ? "Desligado" : "Disconnected"}</span>
+  )
+}
+
+// Default connect form for the simple "paste a Personal Access Token" case
+// (GitHub, Magnific, and any future connector that doesn't need more than
+// one field) — connectors with more than one field (WordPress, n8n) pass
+// their own form to ConnectorCard's renderConnectForm instead.
+function PatConnectForm({ lang, id, name, value, onChange, onSubmit, saving }: {
+  lang: Lang; id: string; name: string; value: string; onChange: (v: string) => void
+  onSubmit: () => void; saving: boolean
+}) {
+  return (
+    <>
+      {CONNECTOR_HELP_URLS[id] && (
+        <div className="flex items-center justify-between mb-1">
+          <label className="text-xs text-muted-foreground">Personal Access Token</label>
+          <a href={CONNECTOR_HELP_URLS[id]} target="_blank" rel="noopener noreferrer"
+            className="inline-flex items-center gap-1 text-primary hover:text-primary/80 text-xs transition-colors">
+            {lang === "pt" ? `Criar token em ${name}` : `Create token on ${name}`} ↗
+          </a>
+        </div>
+      )}
+      <div className="flex items-center gap-2">
+        <input
+          className="flex-1 rounded-lg px-3 py-2 border border-border bg-input/30 text-foreground text-sm outline-none font-mono"
+          type="password"
+          value={value}
+          onChange={e => onChange(e.target.value)}
+          placeholder={lang === "pt" ? "Cola o teu Personal Access Token" : "Paste your Personal Access Token"}
+        />
+        <button
+          onClick={onSubmit}
+          disabled={saving || !value.trim()}
+          className="bg-primary text-primary-foreground rounded-full px-4 py-2 font-medium text-sm hover:opacity-90 disabled:opacity-50 transition-opacity whitespace-nowrap">
+          {lang === "pt" ? "Ligar" : "Connect"}
+        </button>
+      </div>
+    </>
+  )
+}
+
+// One card shape for every "cloud account" connector — OAuth, single-token
+// PAT, or a multi-field form — so a new connector (another OAuth provider,
+// another API-key service) only needs an entry in CONNECTOR_CHIPS plus a
+// row in the parent's list, never a new copy of this markup.
+function ConnectorCard({ lang, connector, expanded, onToggleExpand, saving, onConnectOAuth, onDisconnect, renderConnectForm }: {
+  lang: Lang
+  connector: { id: string; name: string; authMethodSupported: string; status: string; available: boolean; lastError?: string; account?: string }
+  expanded: boolean
+  onToggleExpand: () => void
+  saving: boolean
+  onConnectOAuth: (id: string) => void
+  onDisconnect: (id: string) => void
+  renderConnectForm: () => ReactNode
+}) {
+  const c = connector
+  const connected = c.status === "connected"
+  return (
+    <div className={`bg-card border rounded-xl p-4 flex flex-col gap-3 transition-colors ${connected ? "border-green-700/40 border-l-4 border-l-green-500" : "border-border"}`}>
+      <div className="flex items-start gap-3">
+        <ChipIcon id={c.id} name={c.name} />
+        <div className="min-w-0 flex-1">
+          <span className="font-medium text-sm text-foreground block truncate">{c.name}</span>
+          {/* Sem isto o cartão só diz "Ligado" e não há forma de saber com que
+              conta se ficou ligado — a pergunta que o utilizador fez três
+              vezes seguidas sobre o Google Drive, agora respondida em todos. */}
+          <span className="block truncate text-xs text-muted-foreground">
+            {connected
+              ? (c.account || (lang === "pt" ? "Ligado" : "Connected"))
+              : (lang === "pt" ? "Não ligado" : "Not connected")}
+          </span>
+        </div>
+        <StatusPill lang={lang} connected={connected} />
+      </div>
+
+      {c.lastError && (
+        <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2">
+          <p className="text-xs font-medium text-red-400">
+            {lang === "pt"
+              ? "O servidor deste conector não arrancou — as suas ferramentas não estão disponíveis no chat."
+              : "This connector's server failed to start — its tools aren't available in the chat."}
+          </p>
+          <p className="mt-1 text-xs text-red-400/80 break-words">{c.lastError}</p>
+        </div>
+      )}
+
+      {connected ? (
+        <button
+          onClick={() => onDisconnect(c.id)}
+          disabled={saving}
+          className="text-xs text-muted-foreground hover:text-destructive transition-colors disabled:opacity-50 self-start">
+          {lang === "pt" ? "Desligar" : "Disconnect"}
+        </button>
+      ) : c.authMethodSupported === "oauth" ? (
+        !c.available ? (
+          <p className="text-xs text-muted-foreground">
+            {lang === "pt"
+              ? `Ainda não configurado (falta o Desktop Client ID de ${c.name}).`
+              : `Not configured yet (missing ${c.name} Desktop Client ID).`}
+          </p>
+        ) : (
+          <button
+            onClick={() => onConnectOAuth(c.id)}
+            disabled={saving}
+            className="bg-primary text-primary-foreground rounded-full px-4 py-2 font-medium text-sm hover:opacity-90 disabled:opacity-50 transition-opacity self-start">
+            {lang === "pt" ? "Ligar" : `Connect with ${c.name}`}
+          </button>
+        )
+      ) : expanded ? (
+        <div className="space-y-2">{renderConnectForm()}</div>
+      ) : (
+        <button
+          onClick={onToggleExpand}
+          className="bg-primary text-primary-foreground rounded-full px-4 py-2 font-medium text-sm hover:opacity-90 transition-opacity self-start">
+          {lang === "pt" ? "Ligar" : "Connect"}
+        </button>
+      )}
+    </div>
+  )
+}
+
+// Shared shape for the Adobe UXP connectors (Photoshop, Premiere Pro today
+// — Illustrator is next, same plugin-panel flow per adb-mcp). AutoCAD stays
+// bespoke below: it has no proxy/plugin-panel handshake to wait on, so
+// forcing it into this shape would add branches instead of removing them.
+function AdobeAppCard({ lang, name, status, installing, progress, error, disconnecting, onInstall, onDisconnect, onShowInstaller, installWhat, requirementsId }: {
+  lang: Lang
+  name: string
+  status: {
+    supported: boolean; provisioned: boolean; proxyRunning: boolean
+    mcpConnected: boolean; pluginConnected: boolean; connected: boolean; installDir: string
+    pluginInstallerError?: string
+  } | null
+  installing: boolean
+  progress: { step: string; pct: number } | null
+  error: string | null
+  disconnecting: boolean
+  onInstall: () => void
+  onDisconnect: () => void
+  onShowInstaller: () => void
+  installWhat: string
+  requirementsId: string
+}) {
+  const connected = !!status?.connected
+  return (
+    <div className={`bg-card border rounded-xl p-4 flex flex-col gap-3 transition-colors ${connected ? "border-green-700/40 border-l-4 border-l-green-500" : "border-border"}`}>
+      <div className="flex items-start gap-3">
+        <ChipIcon id={requirementsId} name={name} />
+        <div className="min-w-0 flex-1">
+          <span className="font-medium text-sm text-foreground block truncate">
+            {name} <span className="text-[10px] font-bold uppercase tracking-wide text-muted-foreground bg-muted rounded px-1.5 py-0.5 align-middle">{lang === "pt" ? "Local" : "Local"}</span>
+          </span>
+          <span className="block truncate text-xs text-muted-foreground font-mono">
+            {connected && status?.installDir ? status.installDir : (lang === "pt" ? "Não ligado" : "Not connected")}
+          </span>
+        </div>
+        <StatusPill lang={lang} connected={connected} />
+      </div>
+
+      {!status?.supported ? (
+        <p className="text-xs text-muted-foreground">
+          {lang === "pt" ? "Só disponível no macOS e Windows (64-bit)." : "macOS and Windows (64-bit) only."}
+        </p>
+      ) : connected ? (
+        <div className="space-y-2">
+          <button onClick={onDisconnect} disabled={disconnecting}
+            className="text-xs text-muted-foreground hover:text-destructive transition-colors disabled:opacity-50">
+            {lang === "pt" ? "Desligar" : "Disconnect"}
+          </button>
+          <InstallInfo lang={lang} what={installWhat} dir={status.installDir} />
+        </div>
+      ) : installing ? (
+        <div className="space-y-2">
+          <button disabled className="bg-primary text-primary-foreground rounded-full px-4 py-2 font-medium text-sm opacity-50">
+            {lang === "pt" ? "A ligar…" : "Connecting…"}
+          </button>
+          {progress && (
+            <div className="space-y-1">
+              <div className="h-1.5 bg-border rounded-full overflow-hidden">
+                <div className="h-full bg-primary transition-all" style={{ width: `${progress.pct}%` }} />
+              </div>
+              <p className="text-xs text-muted-foreground">{progress.step}</p>
+            </div>
+          )}
+          <InstallInfo lang={lang} what={installWhat} dir={status?.installDir ?? ""} />
+          {error && <p className="text-xs text-red-400">{error}</p>}
+        </div>
+      ) : status?.provisioned && status?.proxyRunning && status?.mcpConnected ? (
+        <div className="space-y-2">
+          <p className="text-xs text-muted-foreground leading-relaxed">
+            {lang === "pt"
+              ? `✓ ${name} MCP pronto. Abre o ${name} → menu Plugins → ${name} MCP Agent → clica Connect no painel.`
+              : `✓ ${name} MCP ready. Open ${name} → Plugins menu → ${name} MCP Agent → click Connect in the panel.`}
+          </p>
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <span className="inline-block h-2 w-2 rounded-full bg-amber-400 animate-pulse" />
+            {lang === "pt" ? "A verificar a ligação…" : "Checking connection…"}
+          </div>
+          {status?.pluginInstallerError && (
+            <p className="text-xs text-amber-400 leading-relaxed">
+              {lang === "pt"
+                ? "O instalador do plugin não chegou a abrir. Isso costuma querer dizer que falta o Creative Cloud Desktop, que é quem abre ficheiros .ccx — instala-o, ou abre o ficheiro à mão pelo link abaixo."
+                : "The plugin installer never opened. That usually means Creative Cloud Desktop is missing — it's what opens .ccx files. Install it, or open the file by hand with the link below."}
+            </p>
+          )}
+          <button onClick={onShowInstaller} className="text-xs text-muted-foreground underline hover:text-foreground transition-colors">
+            {lang === "pt" ? "Não abriu o instalador do plugin? Mostra o ficheiro" : "Plugin installer didn't open? Show the file"}
+          </button>
+          {error && <p className="text-xs text-red-400">{error}</p>}
+        </div>
+      ) : (
+        <div className="space-y-2">
+          <p className="text-xs text-muted-foreground leading-relaxed">
+            {lang === "pt"
+              ? `A app prepara tudo sozinha (Python, proxy). No fim abre-se o instalador do plugin — só falta abrir o ${name} e clicar Connect no painel; detectamos a ligação automaticamente.`
+              : `The app sets everything up on its own (Python, proxy). At the end the plugin installer opens — just open ${name} and click Connect in the panel; we detect the connection automatically.`}
+          </p>
+          <Requirements lang={lang} id={requirementsId} />
+          <InstallInfo lang={lang} what={installWhat} dir={status?.installDir ?? ""} />
+          <button onClick={onInstall} disabled={installing}
+            className="bg-primary text-primary-foreground rounded-full px-4 py-2 font-medium text-sm hover:opacity-90 disabled:opacity-50 transition-opacity">
+            {lang === "pt" ? `Ligar ${name}` : `Connect ${name}`}
+          </button>
+          {error && <p className="text-xs text-red-400">{error}</p>}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function ConnectorsSummary({ lang, connected, total }: { lang: Lang; connected: number; total: number }) {
+  const pct = total ? Math.round((connected / total) * 100) : 0
+  return (
+    <div className="bg-card border border-border rounded-xl p-4 flex items-center gap-4 flex-wrap">
+      <div className="text-xl font-bold text-foreground tabular-nums shrink-0">
+        {connected}
+        <span className="text-muted-foreground font-medium text-sm"> / {total} {lang === "pt" ? "ligados" : "connected"}</span>
+      </div>
+      <div className="flex-1 min-w-[100px] h-1.5 bg-muted rounded-full overflow-hidden">
+        <div className="h-full bg-green-500 rounded-full transition-all" style={{ width: `${pct}%` }} />
+      </div>
+    </div>
+  )
+}
+
+function ConnectorGroupHeader({ title, description }: { title: string; description: string }) {
+  return (
+    <div className="flex items-baseline justify-between gap-3 border-b border-border pb-2 mb-3">
+      <h3 className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">{title}</h3>
+      <p className="text-xs text-muted-foreground">{description}</p>
+    </div>
+  )
+}
+
 interface Props {
   lang: Lang
   themeColor: string
@@ -131,6 +425,10 @@ export default function SettingsPage({ lang, themeColor, setThemeColor, onNaviga
   const [connectors, setConnectors] = useState<{ id: string; name: string; authMethodSupported: string; status: string; available: boolean; lastError?: string; account?: string }[]>([])
   const [connectorInput, setConnectorInput] = useState<Record<string, string>>({})
   const [connectorSaving, setConnectorSaving] = useState<string | null>(null)
+  // Which disconnected connector's form is open — collapsed by default so
+  // the grid reads as a scan of cards, not a page-long stack of empty
+  // inputs for every service you haven't linked yet.
+  const [expandedConnector, setExpandedConnector] = useState<string | null>(null)
   const [wpForm, setWpForm] = useState({ siteUrl: "", username: "", appPassword: "" })
   const [n8nForm, setN8nForm] = useState({ baseUrl: "", apiKey: "" })
 
@@ -267,6 +565,7 @@ export default function SettingsPage({ lang, themeColor, setThemeColor, onNaviga
     try {
       await api.setConnectorToken(connectorId, token)
       setConnectorInput(prev => ({ ...prev, [connectorId]: "" }))
+      setExpandedConnector(null)
       await loadConnectors()
     } finally {
       setConnectorSaving(null)
@@ -291,6 +590,7 @@ export default function SettingsPage({ lang, themeColor, setThemeColor, onNaviga
     try {
       await api.setWordPressCredentials(siteUrl, username, appPassword)
       setWpForm({ siteUrl: "", username: "", appPassword: "" })
+      setExpandedConnector(null)
       await loadConnectors()
     } catch (err) {
       setMsg({ id: "wordpress", text: `Error: ${err instanceof Error ? err.message : "?"}`, ok: false })
@@ -305,6 +605,7 @@ export default function SettingsPage({ lang, themeColor, setThemeColor, onNaviga
     try {
       await api.setN8nCredentials(baseUrl, apiKey)
       setN8nForm({ baseUrl: "", apiKey: "" })
+      setExpandedConnector(null)
       await loadConnectors()
     } catch (err) {
       setMsg({ id: "n8n", text: `Error: ${err instanceof Error ? err.message : "?"}`, ok: false })
@@ -516,387 +817,226 @@ export default function SettingsPage({ lang, themeColor, setThemeColor, onNaviga
       </div>
 
       {tab === "connectors" && (
-        <div className="max-w-3xl mx-auto p-4 space-y-3">
-          {connectors.map(c => {
-            const connected = c.status === "connected"
-            return (
-              <div key={c.id} className={`bg-card border rounded-xl p-4 transition-colors ${connected ? "border-green-700/40 border-l-4 border-l-green-500" : "border-border"}`}>
-                <div className="flex items-center justify-between mb-3">
-                  <div className="min-w-0">
-                    <span className="font-medium text-sm text-foreground">{c.name}</span>
-                    {/* Sem isto o cartão só diz "Ligado" e não há forma de saber
-                        com que conta se ficou ligado — a pergunta que o
-                        utilizador fez três vezes seguidas. */}
-                    {connected && c.account && (
-                      <span className="block truncate text-xs text-muted-foreground">{c.account}</span>
-                    )}
-                  </div>
-                  {connected
-                    ? <span className="inline-flex items-center gap-1 bg-green-500/15 text-green-400 border border-green-500/30 rounded-full px-2.5 py-0.5 text-xs font-medium">{lang === "pt" ? "Ligado" : "Connected"}</span>
-                    : <span className="text-xs text-muted-foreground">{lang === "pt" ? "Desligado" : "Disconnected"}</span>}
+        <div className="max-w-3xl mx-auto p-4 space-y-6">
+          <ConnectorsSummary
+            lang={lang}
+            connected={connectors.filter(c => c.status === "connected").length + [autocadStatus?.connected, photoshopStatus?.connected, premiereStatus?.connected].filter(Boolean).length}
+            total={connectors.length + 3}
+          />
+
+          <section>
+            <ConnectorGroupHeader
+              title={lang === "pt" ? "Contas na nuvem" : "Cloud accounts"}
+              description={lang === "pt" ? "Ligação por conta — mostra sempre com quem ficaste ligado" : "Account-based — always shows who you're connected as"}
+            />
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {connectors.map(c => (
+                <div key={c.id} className={c.id === "wordpress" ? "sm:col-span-2" : undefined}>
+                  <ConnectorCard
+                    lang={lang}
+                    connector={c}
+                    expanded={expandedConnector === c.id}
+                    onToggleExpand={() => setExpandedConnector(prev => prev === c.id ? null : c.id)}
+                    saving={connectorSaving === c.id}
+                    onConnectOAuth={connectOAuth}
+                    onDisconnect={disconnectConnector}
+                    renderConnectForm={() => {
+                      if (c.id === "wordpress") return (
+                        <>
+                          <input
+                            className="w-full rounded-lg px-3 py-2 border border-border bg-input/30 text-foreground text-sm outline-none font-mono"
+                            type="url"
+                            value={wpForm.siteUrl}
+                            onChange={e => setWpForm(prev => ({ ...prev, siteUrl: e.target.value }))}
+                            placeholder={lang === "pt" ? "URL do site (ex: https://oteusite.com)" : "Site URL (e.g. https://yoursite.com)"}
+                          />
+                          <input
+                            className="w-full rounded-lg px-3 py-2 border border-border bg-input/30 text-foreground text-sm outline-none"
+                            type="text"
+                            value={wpForm.username}
+                            onChange={e => setWpForm(prev => ({ ...prev, username: e.target.value }))}
+                            placeholder={lang === "pt" ? "O teu utilizador WordPress" : "Your WordPress username"}
+                          />
+                          <div className="flex items-center justify-between mb-1">
+                            <label className="text-xs text-muted-foreground">Application Password</label>
+                            <a href={wpForm.siteUrl ? `${wpForm.siteUrl.replace(/\/+$/, '')}/wp-admin/profile.php` : undefined}
+                              target="_blank" rel="noopener noreferrer"
+                              className={`inline-flex items-center gap-1 text-xs transition-colors ${wpForm.siteUrl ? "text-primary hover:text-primary/80" : "text-muted-foreground/40 pointer-events-none"}`}>
+                              {lang === "pt" ? "Criar Application Password" : "Create Application Password"} ↗
+                            </a>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <input
+                              className="flex-1 rounded-lg px-3 py-2 border border-border bg-input/30 text-foreground text-sm outline-none font-mono"
+                              type="password"
+                              value={wpForm.appPassword}
+                              onChange={e => setWpForm(prev => ({ ...prev, appPassword: e.target.value }))}
+                              placeholder={lang === "pt" ? "Cola a Application Password gerada" : "Paste the generated Application Password"}
+                            />
+                            <button
+                              onClick={connectWordPress}
+                              disabled={connectorSaving === "wordpress" || !wpForm.siteUrl.trim() || !wpForm.username.trim() || !wpForm.appPassword.trim()}
+                              className="bg-primary text-primary-foreground rounded-full px-4 py-2 font-medium text-sm hover:opacity-90 disabled:opacity-50 transition-opacity whitespace-nowrap">
+                              {lang === "pt" ? "Ligar" : "Connect"}
+                            </button>
+                          </div>
+                        </>
+                      )
+                      if (c.id === "n8n") return (
+                        <>
+                          <input
+                            className="w-full rounded-lg px-3 py-2 border border-border bg-input/30 text-foreground text-sm outline-none font-mono"
+                            type="url"
+                            value={n8nForm.baseUrl}
+                            onChange={e => setN8nForm(prev => ({ ...prev, baseUrl: e.target.value }))}
+                            placeholder={lang === "pt" ? "URL da instância (ex: http://localhost:5678)" : "Instance URL (e.g. http://localhost:5678)"}
+                          />
+                          <div className="flex items-center justify-between mb-1">
+                            <label className="text-xs text-muted-foreground">API Key</label>
+                            <span className="text-xs text-muted-foreground/60">
+                              {lang === "pt" ? "Definições → n8n API, na tua instância" : "Settings → n8n API, on your instance"}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <input
+                              className="flex-1 rounded-lg px-3 py-2 border border-border bg-input/30 text-foreground text-sm outline-none font-mono"
+                              type="password"
+                              value={n8nForm.apiKey}
+                              onChange={e => setN8nForm(prev => ({ ...prev, apiKey: e.target.value }))}
+                              placeholder={lang === "pt" ? "Cola a API key gerada" : "Paste the generated API key"}
+                            />
+                            <button
+                              onClick={connectN8n}
+                              disabled={connectorSaving === "n8n" || !n8nForm.baseUrl.trim() || !n8nForm.apiKey.trim()}
+                              className="bg-primary text-primary-foreground rounded-full px-4 py-2 font-medium text-sm hover:opacity-90 disabled:opacity-50 transition-opacity whitespace-nowrap">
+                              {lang === "pt" ? "Ligar" : "Connect"}
+                            </button>
+                          </div>
+                        </>
+                      )
+                      return (
+                        <PatConnectForm
+                          lang={lang}
+                          id={c.id}
+                          name={c.name}
+                          value={connectorInput[c.id] || ""}
+                          onChange={v => setConnectorInput(prev => ({ ...prev, [c.id]: v }))}
+                          onSubmit={() => connectToken(c.id)}
+                          saving={connectorSaving === c.id}
+                        />
+                      )
+                    }}
+                  />
                 </div>
-                {c.lastError && (
-                  <div className="mb-3 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2">
-                    <p className="text-xs font-medium text-red-400">
-                      {lang === "pt"
-                        ? "O servidor deste conector não arrancou — as suas ferramentas não estão disponíveis no chat."
-                        : "This connector's server failed to start — its tools aren't available in the chat."}
-                    </p>
-                    <p className="mt-1 text-xs text-red-400/80 break-words">{c.lastError}</p>
+              ))}
+            </div>
+          </section>
+
+          <section>
+            <ConnectorGroupHeader
+              title={lang === "pt" ? "Aplicações locais" : "Local apps"}
+              description={lang === "pt" ? "Automação directa de apps instaladas neste computador — sem conta, sem nuvem" : "Direct automation of apps installed on this machine — no account, no cloud"}
+            />
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className={`bg-card border rounded-xl p-4 flex flex-col gap-3 transition-colors ${autocadStatus?.connected ? "border-green-700/40 border-l-4 border-l-green-500" : "border-border"}`}>
+                <div className="flex items-start gap-3">
+                  <ChipIcon id="autocad" name="AutoCAD" />
+                  <div className="min-w-0 flex-1">
+                    <span className="font-medium text-sm text-foreground block truncate">
+                      AutoCAD <span className="text-[10px] font-bold uppercase tracking-wide text-muted-foreground bg-muted rounded px-1.5 py-0.5 align-middle">{lang === "pt" ? "Local" : "Local"}</span>
+                    </span>
+                    <span className="block truncate text-xs text-muted-foreground font-mono">
+                      {autocadStatus?.connected && autocadStatus.installDir ? autocadStatus.installDir : (lang === "pt" ? "Não ligado" : "Not connected")}
+                    </span>
                   </div>
-                )}
-                {connected ? (
-                  <button
-                    onClick={() => disconnectConnector(c.id)}
-                    disabled={connectorSaving === c.id}
-                    className="text-xs text-muted-foreground hover:text-destructive transition-colors disabled:opacity-50">
-                    {lang === "pt" ? "Desligar" : "Disconnect"}
-                  </button>
-                ) : c.id === "wordpress" ? (
+                  <StatusPill lang={lang} connected={!!autocadStatus?.connected} />
+                </div>
+                {!autocadStatus?.supported ? (
+                  <p className="text-xs text-muted-foreground">
+                    {lang === "pt"
+                      ? "Só disponível no Windows — o AutoCAD é controlado via COM, uma tecnologia que não existe no macOS/Linux."
+                      : "Windows only — AutoCAD is controlled via COM automation, which doesn't exist on macOS/Linux."}
+                  </p>
+                ) : autocadStatus?.connected ? (
                   <div className="space-y-2">
-                    <input
-                      className="w-full rounded-lg px-3 py-2 border border-border bg-input/30 text-foreground text-sm outline-none font-mono"
-                      type="url"
-                      value={wpForm.siteUrl}
-                      onChange={e => setWpForm(prev => ({ ...prev, siteUrl: e.target.value }))}
-                      placeholder={lang === "pt" ? "URL do site (ex: https://oteusite.com)" : "Site URL (e.g. https://yoursite.com)"}
-                    />
-                    <input
-                      className="w-full rounded-lg px-3 py-2 border border-border bg-input/30 text-foreground text-sm outline-none"
-                      type="text"
-                      value={wpForm.username}
-                      onChange={e => setWpForm(prev => ({ ...prev, username: e.target.value }))}
-                      placeholder={lang === "pt" ? "O teu utilizador WordPress" : "Your WordPress username"}
-                    />
-                    <div className="flex items-center justify-between mb-1">
-                      <label className="text-xs text-muted-foreground">Application Password</label>
-                      <a href={wpForm.siteUrl ? `${wpForm.siteUrl.replace(/\/+$/, '')}/wp-admin/profile.php` : undefined}
-                        target="_blank" rel="noopener noreferrer"
-                        className={`inline-flex items-center gap-1 text-xs transition-colors ${wpForm.siteUrl ? "text-primary hover:text-primary/80" : "text-muted-foreground/40 pointer-events-none"}`}>
-                        {lang === "pt" ? "Criar Application Password" : "Create Application Password"} ↗
-                      </a>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <input
-                        className="flex-1 rounded-lg px-3 py-2 border border-border bg-input/30 text-foreground text-sm outline-none font-mono"
-                        type="password"
-                        value={wpForm.appPassword}
-                        onChange={e => setWpForm(prev => ({ ...prev, appPassword: e.target.value }))}
-                        placeholder={lang === "pt" ? "Cola a Application Password gerada" : "Paste the generated Application Password"}
-                      />
-                      <button
-                        onClick={connectWordPress}
-                        disabled={connectorSaving === "wordpress" || !wpForm.siteUrl.trim() || !wpForm.username.trim() || !wpForm.appPassword.trim()}
-                        className="bg-primary text-primary-foreground rounded-full px-4 py-2 font-medium text-sm hover:opacity-90 disabled:opacity-50 transition-opacity whitespace-nowrap">
-                        {lang === "pt" ? "Ligar" : "Connect"}
-                      </button>
-                    </div>
-                  </div>
-                ) : c.id === "n8n" ? (
-                  <div className="space-y-2">
-                    <input
-                      className="w-full rounded-lg px-3 py-2 border border-border bg-input/30 text-foreground text-sm outline-none font-mono"
-                      type="url"
-                      value={n8nForm.baseUrl}
-                      onChange={e => setN8nForm(prev => ({ ...prev, baseUrl: e.target.value }))}
-                      placeholder={lang === "pt" ? "URL da instância (ex: http://localhost:5678)" : "Instance URL (e.g. http://localhost:5678)"}
-                    />
-                    <div className="flex items-center justify-between mb-1">
-                      <label className="text-xs text-muted-foreground">API Key</label>
-                      <span className="text-xs text-muted-foreground/60">
-                        {lang === "pt" ? "Definições → n8n API, na tua instância" : "Settings → n8n API, on your instance"}
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <input
-                        className="flex-1 rounded-lg px-3 py-2 border border-border bg-input/30 text-foreground text-sm outline-none font-mono"
-                        type="password"
-                        value={n8nForm.apiKey}
-                        onChange={e => setN8nForm(prev => ({ ...prev, apiKey: e.target.value }))}
-                        placeholder={lang === "pt" ? "Cola a API key gerada" : "Paste the generated API key"}
-                      />
-                      <button
-                        onClick={connectN8n}
-                        disabled={connectorSaving === "n8n" || !n8nForm.baseUrl.trim() || !n8nForm.apiKey.trim()}
-                        className="bg-primary text-primary-foreground rounded-full px-4 py-2 font-medium text-sm hover:opacity-90 disabled:opacity-50 transition-opacity whitespace-nowrap">
-                        {lang === "pt" ? "Ligar" : "Connect"}
-                      </button>
-                    </div>
-                  </div>
-                ) : c.authMethodSupported === "oauth" ? (
-                  !c.available ? (
-                    <p className="text-xs text-muted-foreground">
-                      {lang === "pt"
-                        ? `Ainda não configurado (falta o Desktop Client ID de ${c.name}).`
-                        : `Not configured yet (missing ${c.name} Desktop Client ID).`}
-                    </p>
-                  ) : (
                     <button
-                      onClick={() => connectOAuth(c.id)}
-                      disabled={connectorSaving === c.id}
-                      className="bg-primary text-primary-foreground rounded-full px-4 py-2 font-medium text-sm hover:opacity-90 disabled:opacity-50 transition-opacity">
-                      {lang === "pt" ? "Ligar" : `Connect with ${c.name}`}
+                      onClick={() => disconnectConnector("autocad")}
+                      disabled={connectorSaving === "autocad"}
+                      className="text-xs text-muted-foreground hover:text-destructive transition-colors disabled:opacity-50">
+                      {lang === "pt" ? "Desligar" : "Disconnect"}
                     </button>
-                  )
+                    <InstallInfo lang={lang} what={autocadInstallWhat} dir={autocadStatus.installDir} />
+                  </div>
                 ) : (
-                  <div>
-                    {CONNECTOR_HELP_URLS[c.id] && (
-                      <div className="flex items-center justify-between mb-1">
-                        <label className="text-xs text-muted-foreground">{lang === "pt" ? "Personal Access Token" : "Personal Access Token"}</label>
-                        <a href={CONNECTOR_HELP_URLS[c.id]} target="_blank" rel="noopener noreferrer"
-                          className="inline-flex items-center gap-1 text-primary hover:text-primary/80 text-xs transition-colors">
-                          {lang === "pt" ? `Criar token em ${c.name}` : `Create token on ${c.name}`} ↗
-                        </a>
+                  <div className="space-y-2">
+                    <p className="text-xs text-muted-foreground leading-relaxed">
+                      {lang === "pt"
+                        ? "Abre o AutoCAD e clica em Ligar. Na primeira vez demora um pouco (a app prepara tudo sozinha) — nada para instalar ou configurar à mão."
+                        : "Open AutoCAD, then click Connect. The first time takes a little while (the app sets everything up on its own) — nothing to install or configure by hand."}
+                    </p>
+                    <Requirements lang={lang} id="autocad" />
+                    <InstallInfo lang={lang} what={autocadInstallWhat} dir={autocadStatus?.installDir ?? ""} />
+                    <button
+                      onClick={installAutocad}
+                      disabled={autocadInstalling}
+                      className="bg-primary text-primary-foreground rounded-full px-4 py-2 font-medium text-sm hover:opacity-90 disabled:opacity-50 transition-opacity">
+                      {autocadInstalling ? (lang === "pt" ? "A ligar…" : "Connecting…") : (lang === "pt" ? "Ligar AutoCAD" : "Connect AutoCAD")}
+                    </button>
+                    {autocadProgress && (
+                      <div className="space-y-1">
+                        <div className="h-1.5 bg-border rounded-full overflow-hidden">
+                          <div className="h-full bg-primary transition-all" style={{ width: `${autocadProgress.pct}%` }} />
+                        </div>
+                        <p className="text-xs text-muted-foreground">{autocadProgress.step}</p>
                       </div>
                     )}
-                    <div className="flex items-center gap-2">
-                      <input
-                        className="flex-1 rounded-lg px-3 py-2 border border-border bg-input/30 text-foreground text-sm outline-none font-mono"
-                        type="password"
-                        value={connectorInput[c.id] || ""}
-                        onChange={e => setConnectorInput(prev => ({ ...prev, [c.id]: e.target.value }))}
-                        placeholder={lang === "pt" ? "Cola o teu Personal Access Token" : "Paste your Personal Access Token"}
-                      />
-                      <button
-                        onClick={() => connectToken(c.id)}
-                        disabled={connectorSaving === c.id || !(connectorInput[c.id] || "").trim()}
-                        className="bg-primary text-primary-foreground rounded-full px-4 py-2 font-medium text-sm hover:opacity-90 disabled:opacity-50 transition-opacity whitespace-nowrap">
-                        {lang === "pt" ? "Ligar" : "Connect"}
-                      </button>
-                    </div>
+                    {autocadError && <p className="text-xs text-red-400">{autocadError}</p>}
                   </div>
                 )}
               </div>
-            )
-          })}
 
-          <div className={`bg-card border rounded-xl p-4 transition-colors ${autocadStatus?.connected ? "border-green-700/40 border-l-4 border-l-green-500" : "border-border"}`}>
-            <div className="flex items-center justify-between mb-3">
-              <span className="font-medium text-sm text-foreground">AutoCAD</span>
-              {autocadStatus?.connected
-                ? <span className="inline-flex items-center gap-1 bg-green-500/15 text-green-400 border border-green-500/30 rounded-full px-2.5 py-0.5 text-xs font-medium">{lang === "pt" ? "Ligado" : "Connected"}</span>
-                : <span className="text-xs text-muted-foreground">{lang === "pt" ? "Desligado" : "Disconnected"}</span>}
-            </div>
-            {!autocadStatus?.supported ? (
-              <p className="text-xs text-muted-foreground">
-                {lang === "pt"
-                  ? "Só disponível no Windows — o AutoCAD é controlado via COM, uma tecnologia que não existe no macOS/Linux."
-                  : "Windows only — AutoCAD is controlled via COM automation, which doesn't exist on macOS/Linux."}
-              </p>
-            ) : autocadStatus?.connected ? (
-              <div className="space-y-2">
-                <button
-                  onClick={() => disconnectConnector("autocad")}
-                  disabled={connectorSaving === "autocad"}
-                  className="text-xs text-muted-foreground hover:text-destructive transition-colors disabled:opacity-50">
-                  {lang === "pt" ? "Desligar" : "Disconnect"}
-                </button>
-                <InstallInfo lang={lang} what={autocadInstallWhat} dir={autocadStatus.installDir} />
-              </div>
-            ) : (
-              <div className="space-y-2">
-                <p className="text-xs text-muted-foreground leading-relaxed">
-                  {lang === "pt"
-                    ? "Abre o AutoCAD e clica em Ligar. Na primeira vez demora um pouco (a app prepara tudo sozinha) — nada para instalar ou configurar à mão."
-                    : "Open AutoCAD, then click Connect. The first time takes a little while (the app sets everything up on its own) — nothing to install or configure by hand."}
-                </p>
-                <Requirements lang={lang} id="autocad" />
-                <InstallInfo lang={lang} what={autocadInstallWhat} dir={autocadStatus?.installDir ?? ""} />
-                <button
-                  onClick={installAutocad}
-                  disabled={autocadInstalling}
-                  className="bg-primary text-primary-foreground rounded-full px-4 py-2 font-medium text-sm hover:opacity-90 disabled:opacity-50 transition-opacity">
-                  {autocadInstalling ? (lang === "pt" ? "A ligar…" : "Connecting…") : (lang === "pt" ? "Ligar AutoCAD" : "Connect AutoCAD")}
-                </button>
-                {autocadProgress && (
-                  <div className="space-y-1">
-                    <div className="h-1.5 bg-border rounded-full overflow-hidden">
-                      <div className="h-full bg-primary transition-all" style={{ width: `${autocadProgress.pct}%` }} />
-                    </div>
-                    <p className="text-xs text-muted-foreground">{autocadProgress.step}</p>
-                  </div>
-                )}
-                {autocadError && <p className="text-xs text-red-400">{autocadError}</p>}
-              </div>
-            )}
-          </div>
+              <AdobeAppCard
+                lang={lang}
+                name="Photoshop"
+                status={photoshopStatus}
+                installing={photoshopInstalling}
+                progress={photoshopProgress}
+                error={photoshopError}
+                disconnecting={photoshopDisconnecting}
+                onInstall={installPhotoshop}
+                onDisconnect={disconnectPhotoshop}
+                onShowInstaller={() => api.showPhotoshopInstaller()}
+                installWhat={adobeInstallWhat("Photoshop")}
+                requirementsId="photoshop"
+              />
 
-          <div className={`bg-card border rounded-xl p-4 transition-colors ${photoshopStatus?.connected ? "border-green-700/40 border-l-4 border-l-green-500" : "border-border"}`}>
-            <div className="flex items-center justify-between mb-3">
-              <span className="font-medium text-sm text-foreground">Photoshop</span>
-              {photoshopStatus?.connected
-                ? <span className="inline-flex items-center gap-1 bg-green-500/15 text-green-400 border border-green-500/30 rounded-full px-2.5 py-0.5 text-xs font-medium">{lang === "pt" ? "Ligado" : "Connected"}</span>
-                : <span className="text-xs text-muted-foreground">{lang === "pt" ? "Desligado" : "Disconnected"}</span>}
+              <AdobeAppCard
+                lang={lang}
+                name="Premiere Pro"
+                status={premiereStatus}
+                installing={premiereInstalling}
+                progress={premiereProgress}
+                error={premiereError}
+                disconnecting={premiereDisconnecting}
+                onInstall={installPremiere}
+                onDisconnect={disconnectPremiere}
+                onShowInstaller={() => api.showPremiereInstaller()}
+                installWhat={adobeInstallWhat("Premiere Pro")}
+                requirementsId="premiere"
+              />
             </div>
-            {!photoshopStatus?.supported ? (
-              <p className="text-xs text-muted-foreground">
-                {lang === "pt"
-                  ? "Só disponível no macOS e Windows (64-bit)."
-                  : "macOS and Windows (64-bit) only."}
-              </p>
-            ) : photoshopStatus?.connected ? (
-              <div className="space-y-2">
-                <button
-                  onClick={disconnectPhotoshop}
-                  disabled={photoshopDisconnecting}
-                  className="text-xs text-muted-foreground hover:text-destructive transition-colors disabled:opacity-50">
-                  {lang === "pt" ? "Desligar" : "Disconnect"}
-                </button>
-                <InstallInfo lang={lang} what={adobeInstallWhat("Photoshop")} dir={photoshopStatus.installDir} />
-              </div>
-            ) : photoshopInstalling ? (
-              <div className="space-y-2">
-                <button
-                  disabled
-                  className="bg-primary text-primary-foreground rounded-full px-4 py-2 font-medium text-sm opacity-50">
-                  {lang === "pt" ? "A ligar…" : "Connecting…"}
-                </button>
-                {photoshopProgress && (
-                  <div className="space-y-1">
-                    <div className="h-1.5 bg-border rounded-full overflow-hidden">
-                      <div className="h-full bg-primary transition-all" style={{ width: `${photoshopProgress.pct}%` }} />
-                    </div>
-                    <p className="text-xs text-muted-foreground">{photoshopProgress.step}</p>
-                  </div>
-                )}
-                <InstallInfo lang={lang} what={adobeInstallWhat("Photoshop")} dir={photoshopStatus?.installDir ?? ""} />
-                {photoshopError && <p className="text-xs text-red-400">{photoshopError}</p>}
-              </div>
-            ) : photoshopStatus?.provisioned && photoshopStatus?.proxyRunning && photoshopStatus?.mcpConnected ? (
-              <div className="space-y-2">
-                <p className="text-xs text-muted-foreground leading-relaxed">
-                  {lang === "pt"
-                    ? "✓ Photoshop MCP pronto. Abre o Photoshop → menu Plugins → Photoshop MCP Agent → clica Connect no painel."
-                    : "✓ Photoshop MCP ready. Open Photoshop → Plugins menu → Photoshop MCP Agent → click Connect in the panel."}
-                </p>
-                <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                  <span className="inline-block h-2 w-2 rounded-full bg-amber-400 animate-pulse" />
-                  {lang === "pt" ? "A verificar a ligação…" : "Checking connection…"}
-                </div>
-                {photoshopStatus?.pluginInstallerError && (
-                  <p className="text-xs text-amber-400 leading-relaxed">
-                    {lang === "pt"
-                      ? "O instalador do plugin não chegou a abrir. Isso costuma querer dizer que falta o Creative Cloud Desktop, que é quem abre ficheiros .ccx — instala-o, ou abre o ficheiro à mão pelo link abaixo."
-                      : "The plugin installer never opened. That usually means Creative Cloud Desktop is missing — it's what opens .ccx files. Install it, or open the file by hand with the link below."}
-                  </p>
-                )}
-                <button
-                  onClick={() => api.showPhotoshopInstaller()}
-                  className="text-xs text-muted-foreground underline hover:text-foreground transition-colors">
-                  {lang === "pt" ? "Não abriu o instalador do plugin? Mostra o ficheiro" : "Plugin installer didn't open? Show the file"}
-                </button>
-                {photoshopError && <p className="text-xs text-red-400">{photoshopError}</p>}
-              </div>
-            ) : (
-              <div className="space-y-2">
-                <p className="text-xs text-muted-foreground leading-relaxed">
-                  {lang === "pt"
-                    ? "A app prepara tudo sozinha (Python, proxy). No fim abre-se o instalador do plugin — só falta abrir o Photoshop e clicar Connect no painel; detectamos a ligação automaticamente."
-                    : "The app sets everything up on its own (Python, proxy). At the end the plugin installer opens — just open Photoshop and click Connect in the panel; we detect the connection automatically."}
-                </p>
-                <Requirements lang={lang} id="photoshop" />
-                <InstallInfo lang={lang} what={adobeInstallWhat("Photoshop")} dir={photoshopStatus?.installDir ?? ""} />
-                <button
-                  onClick={installPhotoshop}
-                  disabled={photoshopInstalling}
-                  className="bg-primary text-primary-foreground rounded-full px-4 py-2 font-medium text-sm hover:opacity-90 disabled:opacity-50 transition-opacity">
-                  {lang === "pt" ? "Ligar Photoshop" : "Connect Photoshop"}
-                </button>
-                {photoshopError && <p className="text-xs text-red-400">{photoshopError}</p>}
-              </div>
-            )}
-          </div>
-
-          <div className={`bg-card border rounded-xl p-4 transition-colors ${premiereStatus?.connected ? "border-green-700/40 border-l-4 border-l-green-500" : "border-border"}`}>
-            <div className="flex items-center justify-between mb-3">
-              <span className="font-medium text-sm text-foreground">Premiere Pro</span>
-              {premiereStatus?.connected
-                ? <span className="inline-flex items-center gap-1 bg-green-500/15 text-green-400 border border-green-500/30 rounded-full px-2.5 py-0.5 text-xs font-medium">{lang === "pt" ? "Ligado" : "Connected"}</span>
-                : <span className="text-xs text-muted-foreground">{lang === "pt" ? "Desligado" : "Disconnected"}</span>}
-            </div>
-            {!premiereStatus?.supported ? (
-              <p className="text-xs text-muted-foreground">
-                {lang === "pt"
-                  ? "Só disponível no macOS e Windows (64-bit)."
-                  : "macOS and Windows (64-bit) only."}
-              </p>
-            ) : premiereStatus?.connected ? (
-              <div className="space-y-2">
-                <button
-                  onClick={disconnectPremiere}
-                  disabled={premiereDisconnecting}
-                  className="text-xs text-muted-foreground hover:text-destructive transition-colors disabled:opacity-50">
-                  {lang === "pt" ? "Desligar" : "Disconnect"}
-                </button>
-                <InstallInfo lang={lang} what={adobeInstallWhat("Premiere Pro")} dir={premiereStatus.installDir} />
-              </div>
-            ) : premiereInstalling ? (
-              <div className="space-y-2">
-                <button
-                  disabled
-                  className="bg-primary text-primary-foreground rounded-full px-4 py-2 font-medium text-sm opacity-50">
-                  {lang === "pt" ? "A ligar…" : "Connecting…"}
-                </button>
-                {premiereProgress && (
-                  <div className="space-y-1">
-                    <div className="h-1.5 bg-border rounded-full overflow-hidden">
-                      <div className="h-full bg-primary transition-all" style={{ width: `${premiereProgress.pct}%` }} />
-                    </div>
-                    <p className="text-xs text-muted-foreground">{premiereProgress.step}</p>
-                  </div>
-                )}
-                <InstallInfo lang={lang} what={adobeInstallWhat("Premiere Pro")} dir={premiereStatus?.installDir ?? ""} />
-                {premiereError && <p className="text-xs text-red-400">{premiereError}</p>}
-              </div>
-            ) : premiereStatus?.provisioned && premiereStatus?.proxyRunning && premiereStatus?.mcpConnected ? (
-              <div className="space-y-2">
-                <p className="text-xs text-muted-foreground leading-relaxed">
-                  {lang === "pt"
-                    ? "✓ Premiere MCP pronto. Abre o Premiere → menu Window → UXP Plugins → Premiere MCP Agent → clica Connect no painel."
-                    : "✓ Premiere MCP ready. Open Premiere → Window menu → UXP Plugins → Premiere MCP Agent → click Connect in the panel."}
-                </p>
-                <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                  <span className="inline-block h-2 w-2 rounded-full bg-amber-400 animate-pulse" />
-                  {lang === "pt" ? "A verificar a ligação…" : "Checking connection…"}
-                </div>
-                {premiereStatus?.pluginInstallerError && (
-                  <p className="text-xs text-amber-400 leading-relaxed">
-                    {lang === "pt"
-                      ? "O instalador do plugin não chegou a abrir. Isso costuma querer dizer que falta o Creative Cloud Desktop, que é quem abre ficheiros .ccx — instala-o, ou abre o ficheiro à mão pelo link abaixo."
-                      : "The plugin installer never opened. That usually means Creative Cloud Desktop is missing — it's what opens .ccx files. Install it, or open the file by hand with the link below."}
-                  </p>
-                )}
-                <button
-                  onClick={() => api.showPremiereInstaller()}
-                  className="text-xs text-muted-foreground underline hover:text-foreground transition-colors">
-                  {lang === "pt" ? "Não abriu o instalador do plugin? Mostra o ficheiro" : "Plugin installer didn't open? Show the file"}
-                </button>
-                {premiereError && <p className="text-xs text-red-400">{premiereError}</p>}
-              </div>
-            ) : (
-              <div className="space-y-2">
-                <p className="text-xs text-muted-foreground leading-relaxed">
-                  {lang === "pt"
-                    ? "A app prepara tudo sozinha (Python, proxy). No fim abre-se o instalador do plugin — só falta abrir o Premiere e clicar Connect no painel; detectamos a ligação automaticamente."
-                    : "The app sets everything up on its own (Python, proxy). At the end the plugin installer opens — just open Premiere and click Connect in the panel; we detect the connection automatically."}
-                </p>
-                <Requirements lang={lang} id="premiere" />
-                <InstallInfo lang={lang} what={adobeInstallWhat("Premiere Pro")} dir={premiereStatus?.installDir ?? ""} />
-                <button
-                  onClick={installPremiere}
-                  disabled={premiereInstalling}
-                  className="bg-primary text-primary-foreground rounded-full px-4 py-2 font-medium text-sm hover:opacity-90 disabled:opacity-50 transition-opacity">
-                  {lang === "pt" ? "Ligar Premiere" : "Connect Premiere"}
-                </button>
-                {premiereError && <p className="text-xs text-red-400">{premiereError}</p>}
-              </div>
-            )}
-          </div>
+          </section>
         </div>
       )}
 
       {tab === "connectors" && (
-        <div className="max-w-3xl mx-auto px-4 pb-2">
+        <div className="max-w-3xl mx-auto px-4 pb-4">
+          <section>
+            <ConnectorGroupHeader
+              title={lang === "pt" ? "Avançado" : "Advanced"}
+              description={lang === "pt" ? "Servidores MCP próprios — para quem já sabe o que está a ligar" : "Custom MCP servers — for those who already know what they're connecting"}
+            />
+          </section>
           <div className="bg-card border border-border rounded-xl p-4">
             <div className="flex items-center justify-between mb-1 flex-wrap gap-2">
               <h3 className="text-foreground font-medium text-sm">{lang === "pt" ? "Servidores MCP" : "MCP Servers"}</h3>

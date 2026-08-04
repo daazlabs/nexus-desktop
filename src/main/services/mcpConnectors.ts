@@ -143,11 +143,13 @@ const CONNECTOR_SCOPES: Record<string, string[]> = {
 }
 
 // Which account is this connected to? Asked once at connect time and stored
-// with the token, so the card can say "Ligado — nome@gmail.com" instead of a
-// bare "Ligado" that leaves the user guessing which account they picked on
-// Google's consent screen. Each connector uses an endpoint its own scopes
-// already allow — there is deliberately no extra "read your profile" scope.
-const ACCOUNT_ENDPOINT: Record<string, { url: string; pick: (d: any) => string | undefined }> = {
+// separately from the credential itself, so the card can say "Ligado — nome@
+// gmail.com" instead of a bare "Ligado" that leaves the user guessing which
+// account they picked on the consent screen. Works for OAuth (access token)
+// and plain PAT connectors alike — same table, same lookup — so a future
+// connector (YouTube, another PAT-based API, …) only needs one entry here to
+// get an identity line for free; no UI change required.
+const ACCOUNT_ENDPOINT: Record<string, { url: string; authHeader?: (token: string) => string; pick: (d: any) => string | undefined }> = {
   gdrive: {
     url: 'https://www.googleapis.com/drive/v3/about?fields=user(emailAddress)',
     pick: (d) => d?.user?.emailAddress,
@@ -156,18 +158,39 @@ const ACCOUNT_ENDPOINT: Record<string, { url: string; pick: (d: any) => string |
     url: 'https://gmail.googleapis.com/gmail/v1/users/me/profile',
     pick: (d) => d?.emailAddress,
   },
+  // GitHub's PAT flow (authMethod: 'pat') reuses this same lookup — the
+  // token works as a normal Bearer credential against the REST API too.
+  github: {
+    url: 'https://api.github.com/user',
+    pick: (d) => d?.login,
+  },
 }
 
 async function fetchAccountLabel(connectorId: string, accessToken: string): Promise<string | undefined> {
   const ep = ACCOUNT_ENDPOINT[connectorId]
   if (!ep) return undefined
   try {
-    const res = await fetch(ep.url, { headers: { Authorization: `Bearer ${accessToken}` } })
+    const authHeader = ep.authHeader?.(accessToken) ?? `Bearer ${accessToken}`
+    const res = await fetch(ep.url, { headers: { Authorization: authHeader, 'User-Agent': 'DaazNexus-Desktop' } })
     if (!res.ok) return undefined
     return ep.pick(await res.json())
   } catch {
     return undefined // puramente informativo — nunca impede a ligação
   }
+}
+
+// Generic identity-label cache, separate from the credential's own vault
+// entry — a PAT connector (GitHub, future ones) stores the raw token as a
+// plain string so the existing buildHeaders/buildEnv(token) functions never
+// need to know a label exists; the label lives at its own key instead of
+// forcing every consumer to unwrap a JSON blob.
+function accountLabelKey(connectorId: string): string {
+  return `mcp_${connectorId}_account`
+}
+
+function saveAccountLabel(connectorId: string, label: string | undefined): void {
+  if (!label) return
+  saveSystemKey(accountLabelKey(connectorId), label)
 }
 
 const CONNECTOR_PROVIDER: Record<string, string> = {
@@ -296,6 +319,13 @@ export interface ConnectorState {
 }
 
 function readAccountLabel(connectorId: string): string | undefined {
+  // New generic store first (works for every auth shape — OAuth, PAT,
+  // form-based). Falls back to the old embedded `.account` field for
+  // Drive/Gmail connections made before this table existed, so upgrading
+  // the app doesn't blank out a label someone already had without asking
+  // them to reconnect.
+  const cached = getSystemKey(accountLabelKey(connectorId))
+  if (cached) return cached
   const raw = getSystemKey(vaultKey(connectorId))
   if (!raw) return undefined
   try {
@@ -317,26 +347,36 @@ export function listConnectors(): ConnectorState[] {
   }))
 }
 
-export function setConnectorToken(connectorId: string, token: string): void {
+export async function setConnectorToken(connectorId: string, token: string): Promise<void> {
   if (!CONNECTOR_DEFS[connectorId]) throw new Error(`Unknown connector: ${connectorId}`)
   saveSystemKey(vaultKey(connectorId), token)
+  // Best-effort identity lookup (GitHub today) — never blocks or fails the
+  // connection itself if the API call doesn't work out.
+  saveAccountLabel(connectorId, await fetchAccountLabel(connectorId, token))
 }
 
 export function setWordPressCredentials(siteUrl: string, username: string, appPassword: string): void {
+  const cleanUrl = siteUrl.trim().replace(/\/+$/, '')
   const blob = JSON.stringify({
-    site_url: siteUrl.trim().replace(/\/+$/, ''),
+    site_url: cleanUrl,
     username: username.trim(),
     app_password: appPassword.trim(),
   })
   saveSystemKey(vaultKey('wordpress'), blob)
+  // No API call needed — the user already typed exactly what identifies
+  // this connection (which site, as whom).
+  const host = cleanUrl.replace(/^https?:\/\//, '')
+  saveAccountLabel('wordpress', `${username.trim()} · ${host}`)
 }
 
 export function setN8nCredentials(baseUrl: string, apiKey: string): void {
+  const cleanUrl = baseUrl.trim().replace(/\/+$/, '')
   const blob = JSON.stringify({
-    base_url: baseUrl.trim().replace(/\/+$/, ''),
+    base_url: cleanUrl,
     api_key: apiKey.trim(),
   })
   saveSystemKey(vaultKey('n8n'), blob)
+  saveAccountLabel('n8n', cleanUrl)
 }
 
 export async function connectOAuth(connectorId: string): Promise<ConnectorState[]> {
@@ -357,6 +397,7 @@ export async function connectOAuth(connectorId: string): Promise<ConnectorState[
   })
   const account = await fetchAccountLabel(connectorId, token.access_token)
   saveSystemKey(vaultKey(connectorId), JSON.stringify({ ...token, account }))
+  saveAccountLabel(connectorId, account)
   return listConnectors()
 }
 
@@ -607,6 +648,7 @@ export async function disconnectConnector(connectorId: string): Promise<void> {
   // being handed to the model, which is the opposite of what the user asked
   // for. (Previously this ran last, behind an unbounded await.)
   deleteSystemKey(vaultKey(connectorId))
+  deleteSystemKey(accountLabelKey(connectorId))
   lastConnectionError.delete(connectorId)
   const conn = connections.get(connectorId)
   if (conn) {
