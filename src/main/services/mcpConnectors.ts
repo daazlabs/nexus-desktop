@@ -720,11 +720,39 @@ async function getAutocadConnection(): Promise<McpConnection | null> {
   }
 }
 
+// Browser automation isn't in CONNECTOR_DEFS either, for the same reason as
+// AutoCAD above — but simpler: there's no credential AND no explicit install
+// step. browser-server is bundled at build time (electron-builder.yml) like
+// wordpress-server/n8n-server, and @playwright/mcp downloads its own
+// Chromium lazily on first real navigation, not on connect. So this is
+// always available, no isProvisioned() guard needed.
+async function getBrowserConnection(): Promise<McpConnection | null> {
+  const existing = connections.get('browser')
+  if (existing) return existing
+  try {
+    const [command, ...args] = nodeServer('browser-server')
+    const env = buildEnv({
+      // Persistent profile under Electron's own userData dir — logins/
+      // cookies survive app restarts (the user chose this over driving
+      // their real day-to-day Chrome).
+      NEXUS_BROWSER_PROFILE_DIR: path.join(app.getPath('userData'), 'browser-runtime', 'profile'),
+      ELECTRON_RUN_AS_NODE: '1',
+    })
+    const conn = await mcpClient.connectStdio('browser', command, args, env)
+    connections.set('browser', conn)
+    return conn
+  } catch (e) {
+    console.warn(`[mcp] failed to connect 'browser':`, e)
+    return null
+  }
+}
+
 async function getConnection(connectorId: string): Promise<McpConnection | null> {
   const existing = connections.get(connectorId)
   if (existing) return existing
 
   if (connectorId === 'autocad') return getAutocadConnection()
+  if (connectorId === 'browser') return getBrowserConnection()
   const adobeApp = ADOBE_APPS.find((a) => a.id === connectorId)
   if (adobeApp) return getAdobeConnection(adobeApp)
 
@@ -809,6 +837,30 @@ export async function listOpenAiToolsForConnectors(): Promise<any[]> {
             for (const t of mcpTools) tools.push(mcpClient.mcpToolToOpenai('autocad', t))
           } catch (e2) {
             console.warn(`[mcp] listTools retry failed for 'autocad':`, e2)
+          }
+        }
+      }
+    }
+  }
+  // Always attempted (no isProvisioned() guard, unlike AutoCAD) — see
+  // getBrowserConnection() comment. A failed connect just returns null and
+  // the tools silently don't show up, same fallback as every other connector.
+  {
+    const conn = await getBrowserConnection()
+    if (conn) {
+      try {
+        const mcpTools = await mcpClient.listTools(conn)
+        for (const t of mcpTools) tools.push(mcpClient.mcpToolToOpenai('browser', t))
+      } catch (e) {
+        console.warn(`[mcp] listTools failed for 'browser', reconnecting:`, e)
+        connections.delete('browser')
+        const fresh = await getBrowserConnection()
+        if (fresh) {
+          try {
+            const mcpTools = await mcpClient.listTools(fresh)
+            for (const t of mcpTools) tools.push(mcpClient.mcpToolToOpenai('browser', t))
+          } catch (e2) {
+            console.warn(`[mcp] listTools retry failed for 'browser':`, e2)
           }
         }
       }

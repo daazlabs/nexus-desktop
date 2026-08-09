@@ -82,7 +82,18 @@ const GITHUB = provider('github', 'GitHub Models', 'https://models.github.ai/inf
 
 const CEREBRAS = provider('cerebras', 'Cerebras', 'https://api.cerebras.ai/v1', 'openai',
   'https://cloud.cerebras.ai/', [
-    model('gpt-oss-120b', 131072, { tools: true, free: true, intelligenceScore: 7, speedScore: 8 }),
+    // tools DELIBERATELY false, not a mistake — observed live 9 Ago 2026
+    // fabricating entire tool calls + fake success narratives as plain text
+    // (a bash "git push --force-with-lease" and a "GitHub API" table, both
+    // invented, no permission popup, nothing actually executed). gpt-oss
+    // models use their own "Harmony" tool-call format; if Cerebras isn't
+    // translating that into real OpenAI tool_calls deltas for this model,
+    // it just writes the call intent as content and then hallucinates a
+    // plausible-sounding result for it — this is a false SUCCESS claim, not
+    // a refusal, so it's more dangerous than most tool-calling failures.
+    // Re-enable only after confirming live that a real tool_calls delta
+    // comes back from this provider for this model.
+    model('gpt-oss-120b', 131072, { tools: false, free: true, intelligenceScore: 7, speedScore: 8 }),
     model('zai-glm-4.7', 131072, { tools: true, free: true, intelligenceScore: 8, speedScore: 7 }),
   ],
 )

@@ -18,7 +18,10 @@ export interface ChatResult {
   toolCalls?: any[]
 }
 
-const RETRY_STATUSES = new Set([429, 503, 502])
+// Exported so fallbackChain.ts's streaming loop can recognize the exact same
+// "transient, worth trying elsewhere" statuses when a mid-stream error hits
+// after content already reached the renderer — see routeWithFallbackStream.
+export const RETRY_STATUSES = new Set([429, 503, 502])
 // Backstop for a rate limit the local accounting in rateLimiter.ts could not
 // see coming (another app sharing the key, a per-hour or per-day cap). Kept
 // short on purpose: these retries sleep INSIDE the timeout race in

@@ -1,6 +1,6 @@
 import { getProvider, getModelsByClass, listAvailable } from './catalog.js'
 import { resolveKey } from './keyVault.js'
-import { getClient, type ChatMessage, type ChatResult } from './providerClients.js'
+import { getClient, RETRY_STATUSES, type ChatMessage, type ChatResult } from './providerClients.js'
 import { checkAndRecord, recordUsage, waitForBudget } from './rateLimiter.js'
 import { recordAttempt } from './analytics.js'
 import { isProviderDisabled } from './healthChecker.js'
@@ -729,10 +729,25 @@ export async function* routeWithFallbackStream(
           yield `__MODEL__:${m}`
           return
         } catch (err: any) {
-          if (holdFirst) {
-            recordAttempt(provider.id, m, false, 0, err.message?.slice(0, 100))
+          const status = err?.status ?? err?.response?.status
+          // 429/502/503 are exactly the transient "try again elsewhere"
+          // class (same set providerClients.ts's own same-request retry
+          // already trusts, see RETRY_STATUSES) — a fallback chain exists
+          // precisely to route around these, so keep going to the next
+          // model even when content already streamed (e.g. gpt-oss's
+          // reasoning block, or a tool-call turn's preamble, landed before
+          // the rate limit hit on a later leg like the post-tool
+          // continuation call). Any OTHER error with content already sent
+          // still gets the conservative "stop and report" treatment below —
+          // we can't tell a genuine crash from something safe to retry.
+          if (holdFirst || (status && RETRY_STATUSES.has(status))) {
+            recordAttempt(provider.id, m, false, totalTokens, err.message?.slice(0, 100))
             markCooldown(m, 15)
             lastErrors.set(m, err?.message?.slice(0, 100) || String(err))
+            if (!holdFirst) {
+              const msg: string = err?.message || String(err)
+              yield `\n\n---\n🔄 ${msg.startsWith(m) ? msg : `${m}: ${msg}`} — a continuar com outro modelo...\n\n`
+            }
             continue
           } else {
             // Content already reached the renderer. Throwing here makes

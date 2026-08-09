@@ -105,7 +105,7 @@ jobs:
       - name: Build MCP servers (Node)
         shell: bash
         run: |
-          for d in gdrive-server gmail-server wordpress-server n8n-server magnific-server; do
+          for d in gdrive-server gmail-server wordpress-server n8n-server magnific-server browser-server; do
             echo "== building $d"
             (cd "../mcp-servers/$d" && npm ci && npm run build && npm prune --omit=dev)
           done
@@ -134,7 +134,7 @@ jobs:
         shell: bash
         run: |
           missing=0
-          for d in gdrive-server gmail-server wordpress-server n8n-server magnific-server; do
+          for d in gdrive-server gmail-server wordpress-server n8n-server magnific-server browser-server; do
             for p in dist/index.js package.json node_modules; do
               [ -e "../mcp-servers/$d/$p" ] || { echo "MISSING: mcp-servers/$d/$p"; missing=1; }
             done
@@ -156,7 +156,7 @@ jobs:
           # source tree alone is what let v1.0.31 ship with dist/ but no
           # node_modules — electron-builder silently dropped them (see the
           # extraResources comment in electron-builder.yml).
-          for d in gdrive-server gmail-server wordpress-server n8n-server magnific-server; do
+          for d in gdrive-server gmail-server wordpress-server n8n-server magnific-server browser-server; do
             [ -e "../mcp-servers/$d/node_modules/@modelcontextprotocol/sdk/package.json" ] \
               || { echo "MISSING: mcp-servers/$d/node_modules/@modelcontextprotocol/sdk"; missing=1; }
           done
@@ -185,7 +185,7 @@ jobs:
           [ -n "$out" ] || { echo "Could not find the unpacked app under dist/"; exit 1; }
           res="$out/Resources"; [ -d "$res" ] || res="$out/resources"
           missing=0
-          for d in gdrive-server gmail-server wordpress-server n8n-server magnific-server; do
+          for d in gdrive-server gmail-server wordpress-server n8n-server magnific-server browser-server; do
             for p in dist/index.js node_modules/@modelcontextprotocol/sdk/package.json; do
               [ -e "$res/mcp-servers/$d/$p" ] || { echo "MISSING in package: $d/$p"; missing=1; }
             done

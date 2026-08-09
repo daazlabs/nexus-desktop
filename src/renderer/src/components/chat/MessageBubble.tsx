@@ -1,8 +1,9 @@
-import { useState, useCallback, memo } from "react"
+import { useState, useCallback, useRef, useLayoutEffect, memo } from "react"
 import type { Message, ToolEvent } from "../../types"
 import type { Lang } from "../../i18n"
 import { t } from "../../i18n"
 import Markdown from "../ui/markdown"
+import { Pencil } from "lucide-react"
 
 interface Props {
   lang: Lang
@@ -14,6 +15,51 @@ interface Props {
   showToolEvents: boolean
   onEdit?: (msgId: number, newContent: string) => void
   onRegenerate?: (msgId: number) => void
+}
+
+// Friendly copy for mcp__browser__* tool events — everything else keeps the
+// raw tool name, this is just polish for a capability the user actually
+// watches happen live (a real Chromium window), not a general-purpose
+// pretty-printer for every tool.
+// Field names below were checked against the actual @playwright/mcp tool
+// schemas (packages/playwright-core/src/tools/backend/*.ts in the installed
+// version), not guessed — e.g. browser_tabs is one unified tool with an
+// `action` enum (list/new/close/select), not separate per-action tools.
+const BROWSER_LABELS: Record<string, (args: Record<string, unknown>, lang: Lang) => string> = {
+  browser_navigate: (a, lang) => (lang === "en" ? `navigating to ${a.url ?? "…"}` : `a navegar para ${a.url ?? "…"}`),
+  browser_click: (a, lang) => (lang === "en" ? `clicking "${a.element ?? "…"}"` : `a clicar em "${a.element ?? "…"}"`),
+  browser_type: (a, lang) => (lang === "en" ? `typing "${a.text ?? "…"}"` : `a escrever "${a.text ?? "…"}"`),
+  browser_snapshot: (_a, lang) => (lang === "en" ? "reading the page" : "a ler a página"),
+  browser_take_screenshot: (_a, lang) => (lang === "en" ? "taking a screenshot" : "a tirar uma captura de ecrã"),
+  browser_select_option: (a, lang) => {
+    const values = Array.isArray(a.values) ? a.values.join(", ") : "…"
+    return lang === "en" ? `selecting "${values}"` : `a selecionar "${values}"`
+  },
+  browser_press_key: (a, lang) => (lang === "en" ? `pressing "${a.key ?? "…"}"` : `a premir "${a.key ?? "…"}"`),
+  browser_wait_for: (_a, lang) => (lang === "en" ? "waiting" : "a aguardar"),
+  browser_tabs: (a, lang) => {
+    const action = String(a.action ?? "")
+    const labels: Record<string, [string, string]> = {
+      new: ["opening a new tab", "a abrir um novo separador"],
+      close: ["closing tab", "a fechar separador"],
+      select: ["switching tab", "a mudar de separador"],
+      list: ["listing tabs", "a listar separadores"],
+    }
+    const [en, pt] = labels[action] ?? ["managing tabs", "a gerir separadores"]
+    return lang === "en" ? en : pt
+  },
+  browser_file_upload: (_a, lang) => (lang === "en" ? "uploading file" : "a carregar ficheiro"),
+  browser_hover: (a, lang) => (lang === "en" ? `hovering "${a.element ?? "…"}"` : `a passar o rato em "${a.element ?? "…"}"`),
+  browser_close: (_a, lang) => (lang === "en" ? "closing browser" : "a fechar o browser"),
+}
+
+function describeToolEvent(tc: ToolEvent, lang: Lang): string {
+  if (tc.name.startsWith("mcp__browser__")) {
+    const base = tc.name.slice("mcp__browser__".length)
+    const fn = BROWSER_LABELS[base]
+    if (fn) return fn(tc.arguments ?? {}, lang)
+  }
+  return tc.name
 }
 
 function extractStream(content: string): { thinking: string; thinkingDone: boolean; visible: string } {
@@ -62,6 +108,25 @@ function MessageBubble({ lang, msg, streamingContent, toolEvents, isStreaming, s
   const [copied, setCopied] = useState(false)
   const [editing, setEditing] = useState(false)
   const [editValue, setEditValue] = useState(msg.content)
+  const editTextareaRef = useRef<HTMLTextAreaElement>(null)
+
+  // rows={editValue.split("\n").length} used to size this by explicit
+  // newlines only — a long message with no manual line breaks (the normal
+  // case) still wraps to several visual lines in the bubble, but counted as
+  // "1 line" here, so the edit box opened tiny instead of matching the
+  // bubble it replaced. Auto-grow to the textarea's own scrollHeight instead
+  // — that reflects wrapped lines too, not just \n. useLayoutEffect (not
+  // useEffect) so it's sized before paint: no visible tiny-then-big flash.
+  const resizeEditTextarea = useCallback(() => {
+    const el = editTextareaRef.current
+    if (!el) return
+    el.style.height = "auto"
+    el.style.height = `${el.scrollHeight}px`
+  }, [])
+
+  useLayoutEffect(() => {
+    if (editing) resizeEditTextarea()
+  }, [editing, resizeEditTextarea])
 
   const copy = useCallback(() => {
     navigator.clipboard.writeText(msg.content).then(() => {
@@ -81,7 +146,7 @@ function MessageBubble({ lang, msg, streamingContent, toolEvents, isStreaming, s
 
   return (
     <div className={`flex ${isUser ? "justify-end" : "justify-start"} group/bubble`}>
-      <div className={`max-w-[85%] ${
+      <div className={`${editing ? "w-full" : "max-w-[85%]"} ${
         isUser ? "bg-primary text-primary-foreground rounded-3xl px-4 py-3" :
         isSystem ? "bg-destructive/10 text-destructive border border-destructive/30 rounded-3xl px-4 py-3" :
         "bg-card text-card-foreground rounded-3xl px-4 py-3 border border-border/50"
@@ -104,7 +169,7 @@ function MessageBubble({ lang, msg, streamingContent, toolEvents, isStreaming, s
                     <span className={tc.status === "running" ? "animate-pulse" : ""}>
                       {tc.status === "running" ? "●" : tc.status === "completed" ? "✓" : "✗"}
                     </span>
-                    <code>{tc.name}</code>
+                    <code>{describeToolEvent(tc, lang)}</code>
                   </div>
                 ))}
               </div>
@@ -130,14 +195,18 @@ function MessageBubble({ lang, msg, streamingContent, toolEvents, isStreaming, s
         ) : editing ? (
           <div className="flex flex-col gap-2">
             <textarea
+              ref={editTextareaRef}
               value={editValue}
-              onChange={e => setEditValue(e.target.value)}
+              onChange={e => {
+                setEditValue(e.target.value)
+                resizeEditTextarea()
+              }}
               onKeyDown={e => {
                 if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submitEdit() }
                 if (e.key === "Escape") setEditing(false)
               }}
-              className="bg-primary/20 text-primary-foreground rounded-xl px-3 py-2 text-sm resize-none outline-none border border-white/20 min-h-[60px] w-full"
-              rows={Math.max(2, editValue.split("\n").length)}
+              className="bg-primary/20 text-primary-foreground rounded-xl px-3 py-2 text-sm resize-none outline-none border border-white/20 min-h-[60px] w-full overflow-hidden"
+              rows={1}
               autoFocus
             />
             <div className="flex gap-2 justify-end">
@@ -152,7 +221,12 @@ function MessageBubble({ lang, msg, streamingContent, toolEvents, isStreaming, s
             </div>
           </div>
         ) : (
-          <Markdown content={msg.content} />
+          // Links render with text-primary (purple) — invisible on a user
+          // bubble, whose own background IS bg-primary (purple on purple).
+          // Force them to the bubble's own foreground color there instead;
+          // assistant/system bubbles have a light/tinted background where
+          // text-primary already reads fine, so leave those alone.
+          <Markdown content={msg.content} className={isUser ? "[&_a]:!text-primary-foreground" : undefined} />
         )}
 
         {!isStreaming && !editing && (
@@ -160,27 +234,35 @@ function MessageBubble({ lang, msg, streamingContent, toolEvents, isStreaming, s
             {isAssistant && msg.model && <span>{msg.model}</span>}
             {isAssistant && msg.tokens_used != null && <span>{msg.tokens_used} tok</span>}
             {isAssistant && msg.duration != null && <span>{msg.duration}s</span>}
-            <div className="ml-auto flex items-center gap-1 opacity-0 group-hover/bubble:opacity-100 transition-opacity">
+            <div className="ml-auto flex items-center gap-1">
+              {/* Always visible, not hidden behind hover like the buttons
+                  below — a faint icon that only appeared on hover was the
+                  original complaint (looked broken/invisible at rest). */}
               {isUser && onEdit && msg.id > 0 && (
-                <button onClick={() => { setEditValue(msg.content); setEditing(true) }}
-                  className="text-[11px] text-muted-foreground/50 hover:text-muted-foreground px-1.5 py-0.5 rounded hover:bg-accent transition-colors"
+                <button onClick={() => {
+                  setEditValue(msg.content)
+                  setEditing(true)
+                }}
+                  className="flex items-center justify-center w-6 h-6 rounded-full bg-accent/70 text-foreground/70 hover:text-foreground hover:bg-accent transition-colors"
                   title={lang === "pt" ? "Editar" : "Edit"}>
-                  ✏️
+                  <Pencil size={13} />
                 </button>
               )}
-              {isAssistant && onRegenerate && msg.id > 0 && (
-                <button onClick={() => onRegenerate(msg.id)}
-                  className="text-[11px] text-muted-foreground/50 hover:text-muted-foreground px-1.5 py-0.5 rounded hover:bg-accent transition-colors"
-                  title={lang === "pt" ? "Regenerar" : "Regenerate"}>
-                  ↻
-                </button>
-              )}
-              {isAssistant && msg.id > 0 && (
-                <button onClick={copy}
-                  className="text-[11px] text-muted-foreground/50 hover:text-muted-foreground px-1.5 py-0.5 rounded hover:bg-accent transition-colors">
-                  {copied ? t(lang, "copied") : t(lang, "copy")}
-                </button>
-              )}
+              <div className="flex items-center gap-1 opacity-0 group-hover/bubble:opacity-100 transition-opacity">
+                {isAssistant && onRegenerate && msg.id > 0 && (
+                  <button onClick={() => onRegenerate(msg.id)}
+                    className="text-[11px] text-muted-foreground/50 hover:text-muted-foreground px-1.5 py-0.5 rounded hover:bg-accent transition-colors"
+                    title={lang === "pt" ? "Regenerar" : "Regenerate"}>
+                    ↻
+                  </button>
+                )}
+                {isAssistant && msg.id > 0 && (
+                  <button onClick={copy}
+                    className="text-[11px] text-muted-foreground/50 hover:text-muted-foreground px-1.5 py-0.5 rounded hover:bg-accent transition-colors">
+                    {copied ? t(lang, "copied") : t(lang, "copy")}
+                  </button>
+                )}
+              </div>
             </div>
           </div>
         )}
