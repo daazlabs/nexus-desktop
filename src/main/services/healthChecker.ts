@@ -8,14 +8,32 @@ const failureCount = new Map<string, number>()
 
 let disabledProviders = new Set<string>()
 
-async function checkHealthLightweight(baseUrl: string, apiKey: string, apiType: string): Promise<boolean> {
+// Providers whose /models probe needs different auth than a bare
+// `Authorization: Bearer` — found live 9 Ago 2026 auditing the paid
+// ("cerebro") tier: Anthropic's native /v1/models wants `x-api-key` +
+// `anthropic-version`, not Bearer (Bearer is only documented for their
+// OpenAI-compat /v1/chat/completions, not /models). Without this a
+// perfectly valid Anthropic key 401s here every 30 min and gets the
+// provider disabled after 3 failures — the user sees "unhealthy" on a key
+// that actually works fine for real chat requests.
+function healthCheckRequest(baseUrl: string, apiKey: string, apiType: string, providerId: string): { url: string; headers: Record<string, string> } {
   const base = baseUrl.replace(/\/+$/, '')
-  // Gemini authenticates via a `?key=` query param, not a Bearer header —
-  // sending Authorization here would 401 on a perfectly healthy provider.
-  const url = apiType === 'google' ? `${base}/models?key=${apiKey}` : `${base}/models`
+  if (apiType === 'google') {
+    // Gemini authenticates via a `?key=` query param, not a header —
+    // sending Authorization here would 401 on a perfectly healthy provider.
+    return { url: `${base}/models?key=${apiKey}`, headers: {} }
+  }
+  if (providerId === 'anthropic') {
+    return { url: `${base}/models`, headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' } }
+  }
+  return { url: `${base}/models`, headers: { Authorization: `Bearer ${apiKey}` } }
+}
+
+async function checkHealthLightweight(baseUrl: string, apiKey: string, apiType: string, providerId: string): Promise<boolean> {
+  const { url, headers } = healthCheckRequest(baseUrl, apiKey, apiType, providerId)
   try {
     const resp = await fetch(url, {
-      headers: apiType === 'google' ? {} : { Authorization: `Bearer ${apiKey}` },
+      headers,
       signal: AbortSignal.timeout(5000),
     })
     return resp.status === 200
@@ -34,7 +52,7 @@ export async function runHealthCheck(): Promise<void> {
     const apiKey = resolveKey(provider.id)
     if (!apiKey) continue
 
-    const ok = await checkHealthLightweight(provider.baseUrl, apiKey, provider.apiType)
+    const ok = await checkHealthLightweight(provider.baseUrl, apiKey, provider.apiType, provider.id)
     if (ok) {
       failureCount.set(provider.id, 0)
       disabledProviders.delete(provider.id)

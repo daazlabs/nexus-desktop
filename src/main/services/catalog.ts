@@ -166,6 +166,15 @@ const POLLINATIONS = provider('pollinations', 'Pollinations AI', 'https://text.p
   ],
 )
 
+// OVH, OpenCode Zen, Together, Replicate, HuggingFace (below): all relay
+// someone else's open-weight model through their own gateway, same shape of
+// provider as Cerebras (gpt-oss-120b) and Kilo (stepfun) — both caught live
+// 9 Ago 2026 fabricating fake tool calls/success instead of really calling
+// tools, despite the catalog saying tools:true (see CEREBRAS below for the
+// full story). None of these five have been live-verified either way yet.
+// Before trusting a paid key on any of them for a BUILD-mode/tool-using
+// task, test it the same way: does a real permission popup appear, or does
+// it just narrate a plausible-sounding result?
 const OVH = provider('ovh', 'OVHcloud AI Endpoints',
   'https://oai.endpoints.kepler.ai.cloud.ovh.net/v1', 'openai',
   'https://endpoints.ai.cloud.ovh.net/', [
@@ -230,6 +239,9 @@ const PERPLEXITY = provider('perplexity', 'Perplexity', 'https://api.perplexity.
   ],
 )
 
+// Together/Replicate/HuggingFace below: same "gateway relaying someone
+// else's model" caution as OVH/OpenCode Zen above — not live-verified for
+// tool-calling correctness yet, see that comment for the full story.
 const TOGETHER = provider('together', 'Together AI', 'https://api.together.xyz/v1', 'openai',
   'https://api.together.ai/settings/api-keys', [
     model('meta-llama/Llama-3.3-70B-Instruct-Turbo', 131072, { tools: true, paid: true, intelligenceScore: 7, speedScore: 5 }),

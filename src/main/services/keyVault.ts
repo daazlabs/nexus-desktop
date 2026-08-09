@@ -33,13 +33,22 @@ function getEncryptionKey(): Buffer {
   )
   try {
     const raw = fs.readFileSync(keyPath, 'utf-8').trim()
+    // Retroactively tighten permissions for installs from before this file
+    // was written with mode 0o600 below — it decrypts every stored provider
+    // API key, so it should never be world/group-readable regardless of the
+    // process umask. Best-effort: never let a chmod failure break startup.
+    try { fs.chmodSync(keyPath, 0o600) } catch { /* e.g. read-only fs, ignore */ }
     const hash = crypto.createHash('sha256').update(raw).digest()
     _cachedKey = hash
     return hash
   } catch {
     const generated = crypto.randomBytes(32).toString('hex')
     fs.mkdirSync(path.dirname(keyPath), { recursive: true })
-    fs.writeFileSync(keyPath, generated, 'utf-8')
+    // mode 0o600: owner read/write only. Without this the key inherits the
+    // process umask (often 022 -> world-readable 644) and sits right next
+    // to vault.json (the encrypted keys it protects) — anyone with read
+    // access to the directory could decrypt every stored API key.
+    fs.writeFileSync(keyPath, generated, { encoding: 'utf-8', mode: 0o600 })
     const hash = crypto.createHash('sha256').update(generated).digest()
     _cachedKey = hash
     return hash

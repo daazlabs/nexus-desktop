@@ -59,6 +59,13 @@ function describeToolEvent(tc: ToolEvent, lang: Lang): string {
     const fn = BROWSER_LABELS[base]
     if (fn) return fn(tc.arguments ?? {}, lang)
   }
+  if (tc.name === "delegar_tarefa") {
+    const tarefa = String(tc.arguments?.tarefa ?? "")
+    const truncated = tarefa.length > 60 ? tarefa.slice(0, 60) + "…" : tarefa
+    return lang === "en"
+      ? `delegating "${truncated}" to a cheaper model`
+      : `a delegar "${truncated}" a um modelo mais barato`
+  }
   return tc.name
 }
 

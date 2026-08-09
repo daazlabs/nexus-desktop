@@ -119,6 +119,7 @@ async function executeToolLoop(
   workingDir?: string,
   seenCounts?: Map<string, number>,
   firstCallTimeout: number = TIMEOUT,
+  callerModelClass?: string,
 ): Promise<[ChatResult, ChatMessage[]]> {
   const seenCalls = seenCounts ?? new Map<string, number>()
   const providerId = getProvider(model)?.id || ''
@@ -160,7 +161,7 @@ async function executeToolLoop(
       try { args = JSON.parse(tc.function.arguments || '{}') } catch { /* */ }
       notifyTool?.({ id: tcId, name: tc.function.name, args, status: 'running', started_at })
       try {
-        const r = await executeToolCall(tc, requestPermission, workingDir)
+        const r = await executeToolCall(tc, requestPermission, workingDir, callerModelClass)
         notifyTool?.({ id: tcId, name: tc.function.name, args, status: 'completed', result: r, started_at, completed_at: Date.now() })
         resultsList.push([tc, r])
       } catch (e: any) {
@@ -203,6 +204,7 @@ async function runToolsAndContinue(
   isCancelled?: () => boolean,
   notifyTool?: ToolNotify,
   workingDir?: string,
+  callerModelClass?: string,
 ): Promise<string> {
   if (isCancelled?.()) return ''
   const resultsList: [any, string][] = []
@@ -214,7 +216,7 @@ async function runToolsAndContinue(
     try { args = JSON.parse(tc.function.arguments || '{}') } catch { /* */ }
     notifyTool?.({ id: tcId, name: tc.function.name, args, status: 'running', started_at })
     try {
-      const r = await executeToolCall(tc, requestPermission, workingDir)
+      const r = await executeToolCall(tc, requestPermission, workingDir, callerModelClass)
       notifyTool?.({ id: tcId, name: tc.function.name, args, status: 'completed', result: r, started_at, completed_at: Date.now() })
       resultsList.push([tc, r])
     } catch (e: any) {
@@ -236,7 +238,7 @@ async function runToolsAndContinue(
     const sig = toolCallSignature(tc)
     seenCounts.set(sig, (seenCounts.get(sig) || 0) + 1)
   }
-  const [result] = await executeToolLoop(client, apiKey, model, workingMsgs, maxTokens, tools.length ? tools : undefined, requestPermission, isCancelled, notifyTool, workingDir, seenCounts, TOOL_CONTINUATION_TIMEOUT)
+  const [result] = await executeToolLoop(client, apiKey, model, workingMsgs, maxTokens, tools.length ? tools : undefined, requestPermission, isCancelled, notifyTool, workingDir, seenCounts, TOOL_CONTINUATION_TIMEOUT, callerModelClass)
   return result.content || ''
 }
 
@@ -269,10 +271,19 @@ const GATED_TOOLS = new Set([
   'create_excel', 'create_word', 'create_powerpoint', 'create_pdf',
 ])
 
+// How long a delegar_tarefa sub-call is allowed to run before we give up on
+// it — the outer tool loop (executeToolLoop/runToolsAndContinue) has no
+// timeout of its own around executeToolCall, only the model-chat calls
+// before/after it do, so a tool that itself makes an LLM call has to impose
+// this on itself. Matches TOOL_CONTINUATION_TIMEOUT, the existing budget for
+// "a call that already did some work and needs to finish".
+const DELEGATE_TIMEOUT = 45000
+
 async function executeToolCall(
   tc: any,
   requestPermission?: (action: string, detail: string) => Promise<boolean>,
   workingDir?: string,
+  callerModelClass?: string,
 ): Promise<string> {
   const nodePath = await import('node:path')
   const name = tc.function.name
@@ -289,6 +300,37 @@ async function executeToolCall(
   if (name.startsWith('mcp__')) {
     const { dispatchMcpCall } = await import('./mcpConnectors.js')
     return await dispatchMcpCall(name, args, requestPermission)
+  }
+
+  if (name === 'delegar_tarefa') {
+    const { maybeEnrichWithWeb } = await import('./webSearch.js')
+    // Preserve the privacy guarantee 'local' was chosen for — never send a
+    // Local conversation's sub-task to a network free-tier model just
+    // because delegation uses a different model. Any other class (cerebro,
+    // trabalhador, auto) delegates to 'trabalhador' (free) — this must
+    // never spend the user's own paid Cerebro key on a call they didn't
+    // directly ask for, same principle already applied to memory
+    // extraction (memoryExtraction.ts).
+    const targetClass = callerModelClass === 'local' ? 'local' : 'trabalhador'
+    const tarefa = String(args.tarefa || '')
+    const enrichment = await maybeEnrichWithWeb(tarefa)
+    const subMessages: ChatMessage[] = enrichment
+      ? [{ role: 'user', content: tarefa }, { role: 'system', content: enrichment }]
+      : [{ role: 'user', content: tarefa }]
+    const maxTokens = Math.min(Number(args.max_tokens) || 1500, 4000)
+    try {
+      // tools: intentionally omitted — a delegated sub-call must not be able
+      // to request tools (including delegar_tarefa again) with its own
+      // fresh MAX_TOOL_ITERATIONS budget, which would bypass the outer
+      // loop's anti-repeat-loop guard entirely.
+      const result = await Promise.race([
+        routeWithFallback(subMessages, targetClass, undefined, 'fastest', maxTokens),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('delegar_tarefa: timeout after 45s')), DELEGATE_TIMEOUT)),
+      ])
+      return result.content || '(sem resultado)'
+    } catch (e: any) {
+      return `Error: ${e.message}`
+    }
   }
 
   // Resolve a file path: absolute paths are kept as-is; relative paths are
@@ -416,6 +458,7 @@ async function tryModels(
   models: string[], messages: ChatMessage[],
   maxTokens: number, tools?: any[],
   requestPermission?: (action: string, detail: string) => Promise<boolean>,
+  callerModelClass?: string,
 ): Promise<ChatResult> {
   const errors: string[] = []
   let emptyCount = 0
@@ -434,7 +477,7 @@ async function tryModels(
     try {
       const startTime = Date.now()
       let workingMsgs = [...messages]
-      const [result] = await executeToolLoop(client, apiKey!, model, workingMsgs, maxTokens, tools, requestPermission)
+      const [result] = await executeToolLoop(client, apiKey!, model, workingMsgs, maxTokens, tools, requestPermission, undefined, undefined, undefined, undefined, undefined, callerModelClass)
 
       result.duration = (Date.now() - startTime) / 1000
 
@@ -500,7 +543,7 @@ export async function routeWithFallback(
     if (tools?.length) filtered = filterToolCapable(filtered)
     if (filtered.length) {
       try {
-        return await tryModels(filtered, messages, maxTokens, tools, requestPermission)
+        return await tryModels(filtered, messages, maxTokens, tools, requestPermission, modelClass)
       } catch {
         console.warn(`[fallback] model override "${model}" failed, falling back`)
       }
@@ -549,7 +592,7 @@ export async function routeWithFallback(
         try {
           const startTime = Date.now()
           let workingMsgs = [...messages]
-          const [result] = await executeToolLoop(client, apiKey!, m, workingMsgs, maxTokens, tools, requestPermission)
+          const [result] = await executeToolLoop(client, apiKey!, m, workingMsgs, maxTokens, tools, requestPermission, undefined, undefined, undefined, undefined, undefined, modelClass)
 
           if (result.content) {
             result.duration = (Date.now() - startTime) / 1000
@@ -629,7 +672,7 @@ export async function* routeWithFallbackStream(
               }
             }
             if (pendingCalls) {
-              const finalContent = await runToolsAndContinue(client, apiKey!, m, messages, pendingCalls, maxTokens, tools || [], requestPermission, isCancelled, notifyTool, workingDir)
+              const finalContent = await runToolsAndContinue(client, apiKey!, m, messages, pendingCalls, maxTokens, tools || [], requestPermission, isCancelled, notifyTool, workingDir, modelClass)
               if (finalContent) yield finalContent
             }
             if (sent) {
@@ -709,7 +752,7 @@ export async function* routeWithFallbackStream(
           }
 
           if (pendingCalls) {
-            const finalContent = await runToolsAndContinue(client, apiKey!, m, messages, pendingCalls, maxTokens, tools || [], requestPermission, isCancelled, notifyTool)
+            const finalContent = await runToolsAndContinue(client, apiKey!, m, messages, pendingCalls, maxTokens, tools || [], requestPermission, isCancelled, notifyTool, undefined, modelClass)
             if (finalContent) {
               holdFirst = false
               yield finalContent
