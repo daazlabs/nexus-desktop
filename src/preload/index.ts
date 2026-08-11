@@ -63,6 +63,24 @@ const api = {
       ipcRenderer.send('nexus:connectors:autocad:install')
       return cleanup
     },
+    sketchupStatus: () => ipcRenderer.invoke('nexus:connectors:sketchup:status'),
+    sketchupInstall: (
+      onProgress: (data: { step: string; pct: number }) => void,
+      onDone: (data: { ok: boolean; status?: unknown; error?: string }) => void,
+    ): (() => void) => {
+      const progressHandler = (_: any, data: { step: string; pct: number }) => onProgress(data)
+      const doneHandler = (_: any, data: { ok: boolean; status?: unknown; error?: string }) => {
+        cleanup(); onDone(data)
+      }
+      const cleanup = () => {
+        ipcRenderer.removeListener('nexus:connectors:sketchup:progress', progressHandler)
+        ipcRenderer.removeListener('nexus:connectors:sketchup:done', doneHandler)
+      }
+      ipcRenderer.on('nexus:connectors:sketchup:progress', progressHandler)
+      ipcRenderer.on('nexus:connectors:sketchup:done', doneHandler)
+      ipcRenderer.send('nexus:connectors:sketchup:install')
+      return cleanup
+    },
     photoshopStatus: () => ipcRenderer.invoke('nexus:connectors:photoshop:status'),
     photoshopDisconnect: () => ipcRenderer.invoke('nexus:connectors:photoshop:disconnect'),
     photoshopShowInstaller: () => ipcRenderer.invoke('nexus:connectors:photoshop:showInstaller'),

@@ -21,7 +21,14 @@ const PYTHON_PIN = '3.11'
 // Common deps every Adobe app's MCP server needs (mirrors mcp/pyproject.toml
 // upstream — not vendored as-is, see NOTICE.md for why). App-specific extras
 // (e.g. numpy/pillow for Photoshop) come from AdobeAppConfig.extraWithDeps.
-const COMMON_WITH_DEPS = ['fonttools', 'python-socketio', 'mcp[cli]', 'requests', 'websocket-client']
+//
+// mcp[cli] pinned below 2.0.0: that release removed `mcp.server.fastmcp`
+// (renamed to `mcp.server.mcpserver`, a different API), which ps-mcp.py/
+// pr-mcp.py import directly — an unpinned `uv --with mcp[cli]` would
+// silently resolve to 2.0.0 on the next run and this connector would stop
+// starting. Same fix applied to autocad-mac-server, which hit this first —
+// see its NOTICE.md and PESQUISA/r-autocad-mac.md.
+const COMMON_WITH_DEPS = ['fonttools', 'python-socketio', 'mcp[cli]==1.29.0', 'requests', 'websocket-client']
 
 const PROXY_READY_LINE = 'running on ws://localhost:3001'
 

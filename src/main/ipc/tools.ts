@@ -366,6 +366,21 @@ export function registerIpcHandlers(): void {
     }
   })
 
+  // SketchUp — same one-click-connector shape as AutoCAD above (see its
+  // comment); getSketchupStatus is async (checks the plugin's HTTP port),
+  // unlike getAutocadStatus.
+  ipcMain.handle('nexus:connectors:sketchup:status', () => mcpConnectors.getSketchupStatus())
+  ipcMain.on('nexus:connectors:sketchup:install', async (event) => {
+    try {
+      const status = await mcpConnectors.installSketchup((step, pct) => {
+        event.sender.send('nexus:connectors:sketchup:progress', { step, pct })
+      })
+      event.sender.send('nexus:connectors:sketchup:done', { ok: true, status })
+    } catch (err: any) {
+      event.sender.send('nexus:connectors:sketchup:done', { ok: false, error: err?.message || String(err) })
+    }
+  })
+
   // Photoshop, like AutoCAD, is a one-click connector — but "install" also
   // opens the plugin's .ccx installer and starts polling for the user's
   // manual "Connect" click inside Photoshop (see mcpConnectors.installPhotoshop).

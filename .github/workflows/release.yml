@@ -141,6 +141,12 @@ jobs:
           done
           [ -e ../mcp-servers/adobe-server/mcp/ps-mcp.py ] || { echo "MISSING: mcp-servers/adobe-server/mcp/ps-mcp.py"; missing=1; }
           [ -e ../mcp-servers/autocad-server/src/server.py ] || { echo "MISSING: mcp-servers/autocad-server/src/server.py"; missing=1; }
+          # Added alongside autocad-server above but missed in the original
+          # check — these two never got a CI guard, so a broken/missing
+          # vendored copy would have shipped silently. Backfilled here.
+          [ -e ../mcp-servers/autocad-mac-server/src/server.py ] || { echo "MISSING: mcp-servers/autocad-mac-server/src/server.py"; missing=1; }
+          [ -e ../mcp-servers/sketchup-server/src/sketchup_mcp/server.py ] || { echo "MISSING: mcp-servers/sketchup-server/src/sketchup_mcp/server.py"; missing=1; }
+          [ -e ../mcp-servers/sketchup-server/sketchup_plugin/sketchup_mcp_server.rb ] || { echo "MISSING: mcp-servers/sketchup-server/sketchup_plugin/sketchup_mcp_server.rb"; missing=1; }
           # Same rule as the servers: shipping without these means the Google
           # and Canva cards land dead ("not configured yet", no button) on
           # every install, which is exactly the failure this check exists for.

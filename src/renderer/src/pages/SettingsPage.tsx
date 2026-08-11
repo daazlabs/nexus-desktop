@@ -37,12 +37,38 @@ const PROVIDER_COLORS: Record<string, string> = {
 // worst way to learn it. New connectors with an external dependency: add an
 // entry here; connectors that need nothing outside the app stay absent.
 const CONNECTOR_REQUIREMENTS: Record<string, Record<Lang, string[]>> = {
-  autocad: {
+  // Windows: live control via COM, AutoCAD has to be the app actually open.
+  "autocad-live": {
     pt: [
       "AutoCAD instalado no Windows e aberto quando ligares (o Nexus comanda a janela que estiver aberta).",
     ],
     en: [
       "AutoCAD installed on Windows and open when you connect (Nexus drives whichever window is open).",
+    ],
+  },
+  // macOS: AutoCAD has no COM/live-control API — see PESQUISA/r-autocad-mac.md.
+  // The agent writes/reads .dxf (and .dwg, if ODA File Converter is present)
+  // instead; AutoCAD doesn't need to be running, only installed to open them.
+  "autocad-file": {
+    pt: [
+      "AutoCAD instalado (não precisa de estar aberto) — o assistente cria/edita ficheiros .dxf que abres/recarregas no AutoCAD para ver.",
+      "Opcional: ODA File Converter (gratuito) para trabalhar directamente em .dwg em vez de só .dxf.",
+    ],
+    en: [
+      "AutoCAD installed (doesn't need to be open) — the assistant creates/edits .dxf files you open/reload in AutoCAD to see.",
+      "Optional: ODA File Converter (free) to work directly in .dwg instead of just .dxf.",
+    ],
+  },
+  sketchup: {
+    pt: [
+      "SketchUp instalado e aberto quando ligares (o plugin corre dentro dele — tal como o AutoCAD no Windows, mas ao contrário do AutoCAD no Mac).",
+      "Depois da primeira instalação do plugin, é preciso reiniciar o SketchUp uma vez para ele carregar.",
+      "V-Ray (opcional): se estiver instalado, o assistente consegue disparar renderizações — não precisa de nenhum passo extra.",
+    ],
+    en: [
+      "SketchUp installed and open when you connect (the plugin runs inside it — like AutoCAD on Windows, unlike AutoCAD on Mac).",
+      "After the plugin's first install, SketchUp needs one restart to load it.",
+      "V-Ray (optional): if installed, the assistant can trigger renders — no extra setup needed.",
     ],
   },
   // Versions per the adb-mcp README at the pinned tag v0.85.4. Premiere's UXP
@@ -127,6 +153,7 @@ const CONNECTOR_CHIPS: Record<string, { label: string; bg: string }> = {
   n8n: { label: "n8n", bg: "#EA4B71" },
   magnific: { label: "Mg", bg: "#6c5ce7" },
   autocad: { label: "Ac", bg: "#C6282E" },
+  sketchup: { label: "Su", bg: "#005F9E" },
   photoshop: { label: "Ps", bg: "#31A8FF" },
   premiere: { label: "Pr", bg: "linear-gradient(135deg,#00005B,#9999FF)" },
 }
@@ -446,10 +473,15 @@ export default function SettingsPage({ lang, themeColor, setThemeColor, onNaviga
   const [mcpTesting, setMcpTesting] = useState<string | null>(null)
   const [mcpTestResult, setMcpTestResult] = useState<Record<string, { ok: boolean; error?: string; toolCount?: number }>>({})
 
-  const [autocadStatus, setAutocadStatus] = useState<{ supported: boolean; provisioned: boolean; connected: boolean; installDir: string } | null>(null)
+  const [autocadStatus, setAutocadStatus] = useState<{ supported: boolean; provisioned: boolean; connected: boolean; installDir: string; mode: "live" | "file"; odafcDetected: boolean } | null>(null)
   const [autocadInstalling, setAutocadInstalling] = useState(false)
   const [autocadProgress, setAutocadProgress] = useState<{ step: string; pct: number } | null>(null)
   const [autocadError, setAutocadError] = useState<string | null>(null)
+
+  const [sketchupStatus, setSketchupStatus] = useState<{ supported: boolean; provisioned: boolean; connected: boolean; installDir: string; sketchupListening: boolean } | null>(null)
+  const [sketchupInstalling, setSketchupInstalling] = useState(false)
+  const [sketchupProgress, setSketchupProgress] = useState<{ step: string; pct: number } | null>(null)
+  const [sketchupError, setSketchupError] = useState<string | null>(null)
 
   const [photoshopStatus, setPhotoshopStatus] = useState<{
     supported: boolean; provisioned: boolean; proxyRunning: boolean
@@ -474,6 +506,7 @@ export default function SettingsPage({ lang, themeColor, setThemeColor, onNaviga
   const loadConnectors = () => api.listConnectors().then(setConnectors).catch(() => {})
   const loadMcpServers = () => api.listMcpServers().then(setMcpServers).catch(() => {})
   const loadAutocadStatus = () => api.getAutocadStatus().then(setAutocadStatus).catch(() => {})
+  const loadSketchupStatus = () => api.getSketchupStatus().then(setSketchupStatus).catch(() => {})
   const loadPhotoshopStatus = () => api.getPhotoshopStatus().then(setPhotoshopStatus).catch(() => {})
   const loadPremiereStatus = () => api.getPremiereStatus().then(setPremiereStatus).catch(() => {})
 
@@ -485,6 +518,7 @@ export default function SettingsPage({ lang, themeColor, setThemeColor, onNaviga
     loadConnectors()
     loadMcpServers()
     loadAutocadStatus()
+    loadSketchupStatus()
     loadPhotoshopStatus()
     loadPremiereStatus()
   }, [])
@@ -509,6 +543,16 @@ export default function SettingsPage({ lang, themeColor, setThemeColor, onNaviga
     const id = setInterval(loadPremiereStatus, 2500)
     return () => clearInterval(id)
   }, [premiereStatus])
+
+  // Same idea as the Photoshop/Premiere polling above: the plugin is
+  // installed but only loads on SketchUp's next startup, so poll while
+  // waiting for the user to open/restart it.
+  useEffect(() => {
+    const awaitingSketchup = sketchupStatus?.provisioned && !sketchupStatus?.sketchupListening
+    if (!awaitingSketchup) return
+    const id = setInterval(loadSketchupStatus, 2500)
+    return () => clearInterval(id)
+  }, [sketchupStatus])
 
   useEffect(() => {
     if (!categorized) return
@@ -623,9 +667,17 @@ export default function SettingsPage({ lang, themeColor, setThemeColor, onNaviga
     }
   }
 
-  const autocadInstallWhat = lang === "pt"
-    ? "Um Python portátil só para a app, mais as bibliotecas pywin32, mcp e pydantic — cerca de 40 MB, 1 a 3 minutos na primeira vez. Não mexe em nenhum Python que já tenhas instalado."
-    : "A portable Python just for the app, plus the pywin32, mcp and pydantic libraries — about 40 MB, 1 to 3 minutes the first time. It doesn't touch any Python you already have."
+  const autocadInstallWhat = autocadStatus?.mode === "file"
+    ? (lang === "pt"
+        ? "O gestor Python 'uv' e a biblioteca ezdxf, só para esta app — cerca de 20 MB, 1 a 3 minutos na primeira vez. Não mexe em nenhum Python que já tenhas instalado."
+        : "The 'uv' Python manager and the ezdxf library, just for this app — about 20 MB, 1 to 3 minutes the first time. It doesn't touch any Python you already have.")
+    : (lang === "pt"
+        ? "Um Python portátil só para a app, mais as bibliotecas pywin32, mcp e pydantic — cerca de 40 MB, 1 a 3 minutos na primeira vez. Não mexe em nenhum Python que já tenhas instalado."
+        : "A portable Python just for the app, plus the pywin32, mcp and pydantic libraries — about 40 MB, 1 to 3 minutes the first time. It doesn't touch any Python you already have.")
+
+  const sketchupInstallWhat = lang === "pt"
+    ? "O gestor Python 'uv' e as bibliotecas httpx/mcp, mais um pequeno plugin (um ficheiro) copiado para a pasta de Plugins do SketchUp — cerca de 20 MB, 1 a 3 minutos na primeira vez."
+    : "The 'uv' Python manager and the httpx/mcp libraries, plus a small plugin (one file) copied into SketchUp's Plugins folder — about 20 MB, 1 to 3 minutes the first time."
 
   const adobeInstallWhat = (appName: string) => lang === "pt"
     ? `O gestor de Python (uv), o servidor de ligação e o plugin do ${appName} — cerca de 100 MB, 2 a 5 minutos na primeira vez. O Photoshop e o Premiere partilham os mesmos ficheiros, por isso o segundo é muito mais rápido.`
@@ -642,6 +694,21 @@ export default function SettingsPage({ lang, themeColor, setThemeColor, onNaviga
         setAutocadProgress(null)
         if (!res.ok) setAutocadError(res.error || (lang === "pt" ? "Erro desconhecido." : "Unknown error."))
         await loadAutocadStatus()
+      },
+    )
+  }
+
+  const installSketchup = () => {
+    setSketchupInstalling(true)
+    setSketchupError(null)
+    setSketchupProgress({ step: lang === "pt" ? "A começar…" : "Starting…", pct: 0 })
+    api.installSketchup(
+      (p) => setSketchupProgress(p),
+      async (res) => {
+        setSketchupInstalling(false)
+        setSketchupProgress(null)
+        if (!res.ok) setSketchupError(res.error || (lang === "pt" ? "Erro desconhecido." : "Unknown error."))
+        await loadSketchupStatus()
       },
     )
   }
@@ -820,7 +887,7 @@ export default function SettingsPage({ lang, themeColor, setThemeColor, onNaviga
         <div className="max-w-3xl mx-auto p-4 space-y-6">
           <ConnectorsSummary
             lang={lang}
-            connected={connectors.filter(c => c.status === "connected").length + [autocadStatus?.connected, photoshopStatus?.connected, premiereStatus?.connected].filter(Boolean).length}
+            connected={connectors.filter(c => c.status === "connected").length + [autocadStatus?.connected, sketchupStatus?.connected, photoshopStatus?.connected, premiereStatus?.connected].filter(Boolean).length}
             total={connectors.length + 3}
           />
 
@@ -954,11 +1021,18 @@ export default function SettingsPage({ lang, themeColor, setThemeColor, onNaviga
                 {!autocadStatus?.supported ? (
                   <p className="text-xs text-muted-foreground">
                     {lang === "pt"
-                      ? "Só disponível no Windows — o AutoCAD é controlado via COM, uma tecnologia que não existe no macOS/Linux."
-                      : "Windows only — AutoCAD is controlled via COM automation, which doesn't exist on macOS/Linux."}
+                      ? "Só disponível no Windows e no macOS — o AutoCAD não tem nenhuma API de automação no Linux."
+                      : "Windows and macOS only — AutoCAD has no automation API on Linux."}
                   </p>
                 ) : autocadStatus?.connected ? (
                   <div className="space-y-2">
+                    {autocadStatus.mode === "file" && (
+                      <p className="text-xs text-muted-foreground leading-relaxed">
+                        {lang === "pt"
+                          ? "Modo ficheiro (Mac): o assistente edita o desenho directamente; abre ou recarrega o ficheiro no AutoCAD para ver as alterações."
+                          : "File mode (Mac): the assistant edits the drawing directly; open or reload the file in AutoCAD to see changes."}
+                      </p>
+                    )}
                     <button
                       onClick={() => disconnectConnector("autocad")}
                       disabled={connectorSaving === "autocad"}
@@ -970,11 +1044,24 @@ export default function SettingsPage({ lang, themeColor, setThemeColor, onNaviga
                 ) : (
                   <div className="space-y-2">
                     <p className="text-xs text-muted-foreground leading-relaxed">
-                      {lang === "pt"
-                        ? "Abre o AutoCAD e clica em Ligar. Na primeira vez demora um pouco (a app prepara tudo sozinha) — nada para instalar ou configurar à mão."
-                        : "Open AutoCAD, then click Connect. The first time takes a little while (the app sets everything up on its own) — nothing to install or configure by hand."}
+                      {autocadStatus?.mode === "file"
+                        ? (lang === "pt"
+                            ? "No Mac não há controlo \"ao vivo\" (o AutoCAD não expõe essa API) — o assistente cria/edita ficheiros .dxf/.dwg que abres ou recarregas no AutoCAD. Clica em Ligar; na primeira vez demora um pouco a preparar-se sozinho."
+                            : "There's no \"live\" control on Mac (AutoCAD doesn't expose that API) — the assistant creates/edits .dxf/.dwg files you open or reload in AutoCAD. Click Connect; the first time takes a little while to set itself up.")
+                        : (lang === "pt"
+                            ? "Abre o AutoCAD e clica em Ligar. Na primeira vez demora um pouco (a app prepara tudo sozinha) — nada para instalar ou configurar à mão."
+                            : "Open AutoCAD, then click Connect. The first time takes a little while (the app sets everything up on its own) — nothing to install or configure by hand.")}
                     </p>
-                    <Requirements lang={lang} id="autocad" />
+                    <Requirements lang={lang} id={autocadStatus?.mode === "file" ? "autocad-file" : "autocad-live"} />
+                    {autocadStatus?.mode === "file" && !autocadStatus.odafcDetected && (
+                      <p className="text-xs text-amber-500/90 leading-relaxed">
+                        {lang === "pt" ? (
+                          <>Não detectámos o ODA File Converter — por agora só .dxf. <a className="underline" href="https://www.opendesign.com/guestfiles/oda_file_converter" target="_blank" rel="noreferrer">Instalar (gratuito)</a> para .dwg directo.</>
+                        ) : (
+                          <>ODA File Converter not detected — .dxf only for now. <a className="underline" href="https://www.opendesign.com/guestfiles/oda_file_converter" target="_blank" rel="noreferrer">Install it (free)</a> for direct .dwg.</>
+                        )}
+                      </p>
+                    )}
                     <InstallInfo lang={lang} what={autocadInstallWhat} dir={autocadStatus?.installDir ?? ""} />
                     <button
                       onClick={installAutocad}
@@ -991,6 +1078,76 @@ export default function SettingsPage({ lang, themeColor, setThemeColor, onNaviga
                       </div>
                     )}
                     {autocadError && <p className="text-xs text-red-400">{autocadError}</p>}
+                  </div>
+                )}
+              </div>
+
+              <div className={`bg-card border rounded-xl p-4 flex flex-col gap-3 transition-colors ${sketchupStatus?.connected ? "border-green-700/40 border-l-4 border-l-green-500" : "border-border"}`}>
+                <div className="flex items-start gap-3">
+                  <ChipIcon id="sketchup" name="SketchUp" />
+                  <div className="min-w-0 flex-1">
+                    <span className="font-medium text-sm text-foreground block truncate">
+                      SketchUp <span className="text-[10px] font-bold uppercase tracking-wide text-muted-foreground bg-muted rounded px-1.5 py-0.5 align-middle">{lang === "pt" ? "Local" : "Local"}</span>
+                    </span>
+                    <span className="block truncate text-xs text-muted-foreground font-mono">
+                      {sketchupStatus?.connected && sketchupStatus.installDir ? sketchupStatus.installDir : (lang === "pt" ? "Não ligado" : "Not connected")}
+                    </span>
+                  </div>
+                  <StatusPill lang={lang} connected={!!sketchupStatus?.connected} />
+                </div>
+                {!sketchupStatus?.supported ? (
+                  <p className="text-xs text-muted-foreground">
+                    {lang === "pt"
+                      ? "Só disponível no Windows e no macOS — o SketchUp não tem API de automação no Linux."
+                      : "Windows and macOS only — SketchUp has no automation API on Linux."}
+                  </p>
+                ) : sketchupStatus?.connected ? (
+                  <div className="space-y-2">
+                    <p className="text-xs text-muted-foreground leading-relaxed">
+                      {lang === "pt"
+                        ? "V-Ray (se estiver instalado) já está disponível — pede ao assistente para renderizar, sem passos extra."
+                        : "V-Ray (if installed) is already available — just ask the assistant to render, no extra steps."}
+                    </p>
+                    <button
+                      onClick={() => disconnectConnector("sketchup")}
+                      disabled={connectorSaving === "sketchup"}
+                      className="text-xs text-muted-foreground hover:text-destructive transition-colors disabled:opacity-50">
+                      {lang === "pt" ? "Desligar" : "Disconnect"}
+                    </button>
+                    <InstallInfo lang={lang} what={sketchupInstallWhat} dir={sketchupStatus.installDir} />
+                  </div>
+                ) : sketchupStatus?.provisioned && !sketchupStatus?.sketchupListening ? (
+                  <div className="space-y-2">
+                    <p className="text-xs text-amber-500/90 leading-relaxed">
+                      {lang === "pt"
+                        ? "Plugin instalado — falta abrir (ou reiniciar, se já estava aberto) o SketchUp para ele carregar. Isto actualiza-se sozinho assim que o SketchUp responder."
+                        : "Plugin installed — open (or restart, if it was already open) SketchUp for it to load. This updates itself as soon as SketchUp responds."}
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    <p className="text-xs text-muted-foreground leading-relaxed">
+                      {lang === "pt"
+                        ? "Abre o SketchUp e clica em Ligar. Na primeira vez demora um pouco (a app prepara tudo sozinha) — só é preciso reiniciar o SketchUp uma vez, depois de o plugin ser instalado."
+                        : "Open SketchUp, then click Connect. The first time takes a little while (the app sets everything up on its own) — SketchUp just needs one restart after the plugin is installed."}
+                    </p>
+                    <Requirements lang={lang} id="sketchup" />
+                    <InstallInfo lang={lang} what={sketchupInstallWhat} dir={sketchupStatus?.installDir ?? ""} />
+                    <button
+                      onClick={installSketchup}
+                      disabled={sketchupInstalling}
+                      className="bg-primary text-primary-foreground rounded-full px-4 py-2 font-medium text-sm hover:opacity-90 disabled:opacity-50 transition-opacity">
+                      {sketchupInstalling ? (lang === "pt" ? "A ligar…" : "Connecting…") : (lang === "pt" ? "Ligar SketchUp" : "Connect SketchUp")}
+                    </button>
+                    {sketchupProgress && (
+                      <div className="space-y-1">
+                        <div className="h-1.5 bg-border rounded-full overflow-hidden">
+                          <div className="h-full bg-primary transition-all" style={{ width: `${sketchupProgress.pct}%` }} />
+                        </div>
+                        <p className="text-xs text-muted-foreground">{sketchupProgress.step}</p>
+                      </div>
+                    )}
+                    {sketchupError && <p className="text-xs text-red-400">{sketchupError}</p>}
                   </div>
                 )}
               </div>

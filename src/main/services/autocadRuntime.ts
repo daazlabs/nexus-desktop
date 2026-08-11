@@ -4,6 +4,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { app } from 'electron'
 import { execa } from 'execa'
+import { buildEnv } from '../mcp/resolveCommand.js'
 
 // Same depth/convention as nodeServer() in mcpConnectors.ts: this file also
 // lives at dist-electron/main/services/, so REPO_ROOT resolves the same way.
@@ -11,11 +12,21 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = path.resolve(__dirname, '..', '..', '..', '..')
 
 // A recent CPython with prebuilt pywin32 wheels on PyPI. Windows-only
-// (amd64) — the whole AutoCAD connector is Windows-only anyway (COM
-// automation has no macOS/Linux equivalent).
+// (amd64) — used for the *live* COM connector, which has no macOS
+// equivalent (see below for the macOS branch, which is file-based).
 const PYTHON_VERSION = '3.11.9'
 const PYTHON_EMBED_URL = `https://www.python.org/ftp/python/${PYTHON_VERSION}/python-${PYTHON_VERSION}-embed-amd64.zip`
 const GET_PIP_URL = 'https://bootstrap.pypa.io/get-pip.py'
+
+// macOS branch: same uv version pin as adobeRuntime.ts (kept independent —
+// each connector's runtime is self-contained, same convention as the rest
+// of this file already follows for autocad-runtime/ vs adobe-runtime/).
+const UV_VERSION = '0.12.1'
+const PYTHON_PIN = '3.11'
+// mcp[cli] pinned: 2.0.0 removed `mcp.server.fastmcp` (see
+// mcp-servers/autocad-mac-server/NOTICE.md) — unpinned would silently break
+// on the next `uv run` dependency resolution.
+const MAC_WITH_DEPS = ['ezdxf', 'mcp[cli]==1.29.0']
 
 export type ProgressFn = (step: string, pct: number) => void
 
@@ -45,8 +56,27 @@ function vendoredSourceDir(): string {
     : path.join(REPO_ROOT, 'mcp-servers', 'autocad-server')
 }
 
+// --- macOS branch: file-based server (ezdxf), no live AutoCAD control ---
+// See mcp-servers/autocad-mac-server/NOTICE.md and
+// PESQUISA/r-autocad-mac.md for why this is a different architecture from
+// the Windows COM connector rather than a port of it.
+function uvDir(): string {
+  return path.join(runtimeDir(), 'uv')
+}
+function uvExe(): string {
+  return path.join(uvDir(), process.platform === 'win32' ? 'uv.exe' : 'uv')
+}
+function macServerDir(): string {
+  return path.join(runtimeDir(), 'mac-server')
+}
+function vendoredMacSourceDir(): string {
+  return app.isPackaged
+    ? path.join(process.resourcesPath, 'mcp-servers', 'autocad-mac-server')
+    : path.join(REPO_ROOT, 'mcp-servers', 'autocad-mac-server')
+}
+
 export function isSupportedPlatform(): boolean {
-  return process.platform === 'win32'
+  return process.platform === 'win32' || process.platform === 'darwin'
 }
 
 // Shown in Settings before the user starts the install, so they know where
@@ -199,14 +229,105 @@ function ensureVendoredSource(): void {
   fs.cpSync(src, cadMcpDir(), { recursive: true })
 }
 
+// --- macOS branch helpers ---
+
+function assertVendoredMacSourcePresent(): void {
+  const src = vendoredMacSourceDir()
+  if (!fs.existsSync(src)) {
+    throw new Error(`Ficheiros do servidor AutoCAD (Mac) não encontrados em "${src}" — build incompleto.`)
+  }
+}
+
+function ensureVendoredMacSource(): void {
+  const src = vendoredMacSourceDir()
+  fs.rmSync(macServerDir(), { recursive: true, force: true })
+  fs.cpSync(src, macServerDir(), { recursive: true })
+}
+
+// Same uv release asset naming as adobeRuntime.ts's uvAssetUrl (darwin arm64
+// vs x64 tar.gz, extracting into a uv-<triple>/ subfolder).
+function uvAssetUrl(): string {
+  const arch = process.arch === 'arm64' ? 'aarch64' : 'x86_64'
+  return `https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-${arch}-apple-darwin.tar.gz`
+}
+
+async function ensureUv(onProgress: ProgressFn): Promise<void> {
+  if (fs.existsSync(uvExe())) return
+  onProgress('A descarregar o gestor Python (uv)...', 20)
+  fs.mkdirSync(uvDir(), { recursive: true })
+  const tarPath = path.join(runtimeDir(), 'uv.tar.gz')
+  await downloadFile(uvAssetUrl(), tarPath)
+  onProgress('A extrair uv...', 35)
+  const tmpDir = path.join(runtimeDir(), 'uv-extract-tmp')
+  fs.mkdirSync(tmpDir, { recursive: true })
+  await execa('tar', ['-xzf', tarPath, '-C', tmpDir])
+  const entries = fs.readdirSync(tmpDir)
+  const subdir = entries.find((e) => fs.statSync(path.join(tmpDir, e)).isDirectory())
+  const srcDir = subdir ? path.join(tmpDir, subdir) : tmpDir
+  for (const f of fs.readdirSync(srcDir)) {
+    fs.cpSync(path.join(srcDir, f), path.join(uvDir(), f))
+  }
+  fs.rmSync(tmpDir, { recursive: true, force: true })
+  fs.rmSync(tarPath, { force: true })
+  fs.chmodSync(uvExe(), 0o755)
+}
+
+// Best-effort detection of the (free) ODA File Converter install — needed
+// by the Mac server only for .dwg (not .dxf) read/write, via ezdxf's odafc
+// add-on. NÃO VERIFICADO: the exact app-bundle path Autodesk/ODA ships on
+// macOS wasn't confirmed by our research (PESQUISA/r-autocad-mac.md §5c) —
+// this scans /Applications instead of hardcoding one path, and simply
+// omits ODAFC_PATH (falling back to a PATH lookup inside the server) if it
+// finds nothing. Never throws: .dwg just won't be available, .dxf still is.
+export function findOdafcPath(): string | null {
+  if (process.platform !== 'darwin') return null
+  const appsDir = '/Applications'
+  try {
+    const candidates = fs.readdirSync(appsDir).filter((e) => /odafileconverter/i.test(e))
+    for (const candidate of candidates) {
+      const macosDir = path.join(appsDir, candidate, 'Contents', 'MacOS')
+      if (!fs.existsSync(macosDir)) continue
+      const exe = fs.readdirSync(macosDir).find((f) => /odafileconverter/i.test(f))
+      if (exe) return path.join(macosDir, exe)
+    }
+  } catch (e) {
+    console.warn('[autocad] falha ao procurar o ODA File Converter:', e)
+  }
+  return null
+}
+
 export interface AutocadTarget {
   command: string
   args: string[]
   cwd: string
+  env?: Record<string, string>
 }
 
 export function isProvisioned(): boolean {
+  if (process.platform === 'darwin') return fs.existsSync(uvExe())
   return fs.existsSync(pythonExe()) && fs.existsSync(path.join(pythonDir(), 'Lib', 'site-packages', 'win32com'))
+}
+
+async function ensureAutocadRuntimeMac(onProgress: ProgressFn): Promise<AutocadTarget> {
+  assertVendoredMacSourcePresent()
+  fs.mkdirSync(runtimeDir(), { recursive: true })
+  onProgress('A preparar...', 5)
+  await ensureUv(onProgress)
+  onProgress('A preparar o servidor AutoCAD...', 90)
+  ensureVendoredMacSource()
+  const odafcPath = findOdafcPath()
+  onProgress('Pronto', 100)
+  const withArgs = MAC_WITH_DEPS.flatMap((d) => ['--with', d])
+  return {
+    command: uvExe(),
+    args: ['run', '--no-project', '--python', PYTHON_PIN, ...withArgs, path.join('src', 'server.py')],
+    cwd: macServerDir(),
+    env: buildEnv({
+      UV_CACHE_DIR: path.join(runtimeDir(), 'uv-cache'),
+      UV_PYTHON_INSTALL_DIR: path.join(runtimeDir(), 'uv-python'),
+      ...(odafcPath ? { ODAFC_PATH: odafcPath } : {}),
+    }),
+  }
 }
 
 // Idempotent: safe to call every time the user clicks "Ligar AutoCAD" —
@@ -214,8 +335,10 @@ export function isProvisioned(): boolean {
 // failure resumes rather than re-downloading everything.
 export async function ensureAutocadRuntime(onProgress: ProgressFn = () => {}): Promise<AutocadTarget> {
   if (!isSupportedPlatform()) {
-    throw new Error('O AutoCAD só está disponível no Windows (usa automação COM, que não existe no macOS/Linux).')
+    throw new Error('O AutoCAD só está disponível no Windows e no macOS.')
   }
+  if (process.platform === 'darwin') return ensureAutocadRuntimeMac(onProgress)
+
   assertVendoredSourcePresent()
   fs.mkdirSync(runtimeDir(), { recursive: true })
   onProgress('A preparar...', 5)

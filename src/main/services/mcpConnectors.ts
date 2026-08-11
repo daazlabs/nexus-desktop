@@ -8,6 +8,7 @@ import * as oauthFlow from './oauthFlow.js'
 import * as customMcpServers from './customMcpServers.js'
 import { buildEnv } from '../mcp/resolveCommand.js'
 import * as autocadRuntime from './autocadRuntime.js'
+import * as sketchupRuntime from './sketchupRuntime.js'
 import * as adobeRuntime from './adobeRuntime.js'
 import { PHOTOSHOP, PREMIERE, type AdobeAppConfig } from './adobeRuntime.js'
 import type { McpConnection } from './mcpClient.js'
@@ -408,6 +409,12 @@ export interface AutocadStatus {
   // Where the one-click install puts its files — shown in Settings so the
   // user knows what's being downloaded and where, before starting.
   installDir: string
+  // macOS only: which backend this is ('live' Windows COM vs 'file' ezdxf)
+  // and whether the (optional, .dwg-only) ODA File Converter was found —
+  // both drive the Settings copy so the user knows what to expect before
+  // clicking "Ligar AutoCAD". Always 'live' on Windows.
+  mode: 'live' | 'file'
+  odafcDetected: boolean
 }
 
 export function getAutocadStatus(): AutocadStatus {
@@ -416,6 +423,8 @@ export function getAutocadStatus(): AutocadStatus {
     provisioned: autocadRuntime.isProvisioned(),
     connected: connections.has('autocad'),
     installDir: autocadRuntime.installDir(),
+    mode: process.platform === 'darwin' ? 'file' : 'live',
+    odafcDetected: autocadRuntime.findOdafcPath() !== null,
   }
 }
 
@@ -428,8 +437,60 @@ export async function installAutocad(onProgress?: (step: string, pct: number) =>
   await autocadRuntime.ensureAutocadRuntime(onProgress)
   connections.delete('autocad')
   const conn = await getAutocadConnection()
-  if (!conn) throw new Error('Não foi possível ligar ao AutoCAD. Confirma que o AutoCAD está aberto e tenta novamente.')
+  if (!conn) {
+    // On macOS the server is file-based (no live AutoCAD instance to talk
+    // to — see autocadRuntime.ts), so "AutoCAD not open" isn't the likely
+    // cause of a failed connection there; the generic message avoids
+    // sending the user to check something that was never a requirement.
+    const hint =
+      process.platform === 'darwin'
+        ? 'Não foi possível iniciar o servidor AutoCAD.'
+        : 'Não foi possível ligar ao AutoCAD. Confirma que o AutoCAD está aberto e tenta novamente.'
+    throw new Error(hint)
+  }
   return getAutocadStatus()
+}
+
+export interface SketchupStatus {
+  supported: boolean
+  provisioned: boolean
+  connected: boolean
+  installDir: string
+  // Whether SketchUp itself is currently open with the plugin's embedded
+  // HTTP server answering — distinct from `provisioned` (our files copied).
+  // Shown in Settings so "install succeeded but nothing happens" doesn't
+  // look broken: a fresh plugin install only loads on SketchUp's next
+  // startup, same as the upstream README's manual-install instructions.
+  sketchupListening: boolean
+}
+
+export async function getSketchupStatus(): Promise<SketchupStatus> {
+  return {
+    supported: sketchupRuntime.isSupportedPlatform(),
+    provisioned: sketchupRuntime.isProvisioned(),
+    connected: connections.has('sketchup'),
+    installDir: sketchupRuntime.installDir(),
+    sketchupListening: await sketchupRuntime.isSketchupListening(),
+  }
+}
+
+// Drives the one-click "Ligar SketchUp" button. Unlike AutoCAD, a
+// successful provision doesn't necessarily mean we can connect yet: the
+// plugin file we just copied only loads the next time SketchUp starts, so
+// this checks the embedded HTTP server is actually answering before trying
+// an MCP connection, and gives a specific "abre/reinicia o SketchUp" error
+// instead of a generic connection failure when it isn't.
+export async function installSketchup(onProgress?: (step: string, pct: number) => void): Promise<SketchupStatus> {
+  await sketchupRuntime.ensureSketchupRuntime(onProgress)
+  if (!(await sketchupRuntime.isSketchupListening())) {
+    throw new Error(
+      'O plugin foi instalado, mas o SketchUp ainda não está a responder. Abre o SketchUp (ou reinicia-o, se já estava aberto) e clica em Ligar outra vez.',
+    )
+  }
+  connections.delete('sketchup')
+  const conn = await getSketchupConnection()
+  if (!conn) throw new Error('Não foi possível ligar ao SketchUp.')
+  return getSketchupStatus()
 }
 
 export interface AdobeConnectorStatus {
@@ -711,11 +772,32 @@ async function getAutocadConnection(): Promise<McpConnection | null> {
   if (!autocadRuntime.isProvisioned()) return null
   try {
     const target = await autocadRuntime.ensureAutocadRuntime()
-    const conn = await mcpClient.connectStdio('autocad', target.command, target.args, undefined, target.cwd)
+    const conn = await mcpClient.connectStdio('autocad', target.command, target.args, target.env, target.cwd)
     connections.set('autocad', conn)
     return conn
   } catch (e) {
     console.warn(`[mcp] failed to connect 'autocad':`, e)
+    return null
+  }
+}
+
+// Same shape as getAutocadConnection above, plus the "is SketchUp actually
+// listening" guard — an MCP connection can succeed even while SketchUp's
+// embedded HTTP server is down (the Python side spawns fine either way),
+// so callers would otherwise get a connection that fails on the first real
+// tool call instead of a clear reason up front.
+async function getSketchupConnection(): Promise<McpConnection | null> {
+  const existing = connections.get('sketchup')
+  if (existing) return existing
+  if (!sketchupRuntime.isProvisioned()) return null
+  if (!(await sketchupRuntime.isSketchupListening())) return null
+  try {
+    const target = await sketchupRuntime.ensureSketchupRuntime()
+    const conn = await mcpClient.connectStdio('sketchup', target.command, target.args, target.env, target.cwd)
+    connections.set('sketchup', conn)
+    return conn
+  } catch (e) {
+    console.warn(`[mcp] failed to connect 'sketchup':`, e)
     return null
   }
 }
@@ -752,6 +834,7 @@ async function getConnection(connectorId: string): Promise<McpConnection | null>
   if (existing) return existing
 
   if (connectorId === 'autocad') return getAutocadConnection()
+  if (connectorId === 'sketchup') return getSketchupConnection()
   if (connectorId === 'browser') return getBrowserConnection()
   const adobeApp = ADOBE_APPS.find((a) => a.id === connectorId)
   if (adobeApp) return getAdobeConnection(adobeApp)
@@ -837,6 +920,27 @@ export async function listOpenAiToolsForConnectors(): Promise<any[]> {
             for (const t of mcpTools) tools.push(mcpClient.mcpToolToOpenai('autocad', t))
           } catch (e2) {
             console.warn(`[mcp] listTools retry failed for 'autocad':`, e2)
+          }
+        }
+      }
+    }
+  }
+  if (sketchupRuntime.isProvisioned()) {
+    const conn = await getSketchupConnection()
+    if (conn) {
+      try {
+        const mcpTools = await mcpClient.listTools(conn)
+        for (const t of mcpTools) tools.push(mcpClient.mcpToolToOpenai('sketchup', t))
+      } catch (e) {
+        console.warn(`[mcp] listTools failed for 'sketchup', reconnecting:`, e)
+        connections.delete('sketchup')
+        const fresh = await getSketchupConnection()
+        if (fresh) {
+          try {
+            const mcpTools = await mcpClient.listTools(fresh)
+            for (const t of mcpTools) tools.push(mcpClient.mcpToolToOpenai('sketchup', t))
+          } catch (e2) {
+            console.warn(`[mcp] listTools retry failed for 'sketchup':`, e2)
           }
         }
       }

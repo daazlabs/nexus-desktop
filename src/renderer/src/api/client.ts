@@ -385,6 +385,8 @@ export const api = {
     provisioned: boolean
     connected: boolean
     installDir: string
+    mode: "live" | "file"
+    odafcDetected: boolean
   }> => {
     return (
       (await nexusApi.connectors?.autocadStatus?.()) || {
@@ -392,6 +394,8 @@ export const api = {
         provisioned: false,
         connected: false,
         installDir: "",
+        mode: "live",
+        odafcDetected: false,
       }
     )
   },
@@ -401,6 +405,31 @@ export const api = {
     onDone: (data: { ok: boolean; status?: unknown; error?: string }) => void,
   ): (() => void) => {
     return nexusApi.connectors?.autocadInstall?.(onProgress, onDone) ?? (() => {})
+  },
+
+  getSketchupStatus: async (): Promise<{
+    supported: boolean
+    provisioned: boolean
+    connected: boolean
+    installDir: string
+    sketchupListening: boolean
+  }> => {
+    return (
+      (await nexusApi.connectors?.sketchupStatus?.()) || {
+        supported: false,
+        provisioned: false,
+        connected: false,
+        installDir: "",
+        sketchupListening: false,
+      }
+    )
+  },
+
+  installSketchup: (
+    onProgress: (data: { step: string; pct: number }) => void,
+    onDone: (data: { ok: boolean; status?: unknown; error?: string }) => void,
+  ): (() => void) => {
+    return nexusApi.connectors?.sketchupInstall?.(onProgress, onDone) ?? (() => {})
   },
 
   getPhotoshopStatus: async (): Promise<{

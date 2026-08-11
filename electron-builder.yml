@@ -74,6 +74,14 @@ extraResources:
   - from: ../mcp-servers/adobe-server
     to: mcp-servers/adobe-server
     filter: ['mcp/**/*', 'LICENSE', 'NOTICE.md']
+  # SketchUp MCP server (vendored sketchup-mcp, see mcp-servers/sketchup-server/
+  # NOTICE.md) — pure Python + one Ruby file, no node_modules. Not
+  # platform-gated, same reasoning as adobe-server above: SketchUp's Ruby API
+  # is cross-platform. uv is NOT bundled — sketchupRuntime.ts downloads it at
+  # runtime, same as the Adobe/AutoCAD Mac connectors.
+  - from: ../mcp-servers/sketchup-server
+    to: mcp-servers/sketchup-server
+    filter: ['src/**/*', 'sketchup_plugin/**/*', 'resources/**/*', 'LICENSE', 'NOTICE.md']
 
 linux:
   target:
@@ -104,3 +112,13 @@ mac:
   identity: null
   gatekeeperAssess: false
   hardenedRuntime: false
+  # AutoCAD MCP server, macOS branch (file-based, ezdxf — see
+  # mcp-servers/autocad-mac-server/NOTICE.md and PESQUISA/r-autocad-mac.md
+  # for why this is a different backend from the Windows COM one above, not
+  # a port of it). Own code, not vendored — no LICENSE to bundle, unlike
+  # autocad-server/adobe-server. uv and its Python/ezdxf are provisioned at
+  # runtime by autocadRuntime.ts, same rationale as the win: block above.
+  extraResources:
+    - from: ../mcp-servers/autocad-mac-server
+      to: mcp-servers/autocad-mac-server
+      filter: ['src/**/*', 'requirements.txt', 'NOTICE.md']
