@@ -38,7 +38,14 @@ export interface AdobeAppConfig {
   id: 'photoshop' | 'premiere' | 'indesign'
   displayName: string
   entryScript: string
-  ccxAssetName: string
+  // Exactly one of these two is set. Photoshop/Premiere have a pre-built
+  // .ccx published on an adb-mcp release — downloaded as-is. InDesign
+  // doesn't (see mcp-servers/adobe-server/NOTICE.md): no upstream release
+  // has ever shipped one, so we build it ourselves from the vendored UXP
+  // source (uxp/<buildCcxFromUxpFolder>/) — a .ccx is just that folder
+  // zipped with manifest.json at the root, no signing required for UXP.
+  ccxAssetName?: string
+  buildCcxFromUxpFolder?: string
   extraWithDeps: string[]
   pingTool: string
 }
@@ -62,6 +69,19 @@ export const PREMIERE: AdobeAppConfig = {
   ccxAssetName: 'Premiere.MCP.Agent_premierepro.ccx',
   extraWithDeps: ['pillow'],
   pingTool: 'get_project_info',
+}
+
+// id-mcp.py only imports core/socket_client — no numpy/pillow needed.
+// pingTool is get_app_info, not get_documents-style: neither
+// create_document (side effect) nor get_active_document_info (throws with
+// no document open) are safe to poll — see mcp-servers/adobe-server/NOTICE.md.
+export const INDESIGN: AdobeAppConfig = {
+  id: 'indesign',
+  displayName: 'InDesign',
+  entryScript: 'id-mcp.py',
+  buildCcxFromUxpFolder: 'id',
+  extraWithDeps: [],
+  pingTool: 'get_app_info',
 }
 
 function runtimeDir(): string {
@@ -340,6 +360,48 @@ async function ensureCcxDownloaded(appCfg: AdobeAppConfig, onProgress: ProgressF
   return dest
 }
 
+// InDesign has no release asset to download (see AdobeAppConfig's comment
+// and mcp-servers/adobe-server/NOTICE.md) — a .ccx is just its plugin
+// folder zipped with manifest.json at the root, so we build one from the
+// vendored uxp/<folder>/ source instead. Re-built on every call the same
+// way ensureVendoredMcpSource() re-copies the .py source: cheap, and keeps
+// an app update from shipping a stale zip.
+async function buildCcxFromSource(appCfg: AdobeAppConfig, onProgress: ProgressFn): Promise<string> {
+  const dest = ccxPath(appCfg)
+  fs.rmSync(dest, { force: true })
+  onProgress('A preparar o instalador do plugin...', 90)
+  const srcDir = path.join(vendoredSourceDir(), 'uxp', appCfg.buildCcxFromUxpFolder!)
+  if (!fs.existsSync(srcDir)) {
+    throw new Error(`Ficheiros do plugin ${appCfg.displayName} não encontrados em "${srcDir}" — build incompleto.`)
+  }
+  if (process.platform === 'win32') {
+    // Compress-Archive insists on a .zip extension, so target a temp .zip
+    // and rename — a .ccx is a plain zip regardless of the extension on disk.
+    const tmpZip = `${dest}.zip`
+    fs.rmSync(tmpZip, { force: true })
+    await execa('powershell', [
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      `Compress-Archive -Path "${srcDir}\\*" -DestinationPath "${tmpZip}" -Force`,
+    ])
+    fs.renameSync(tmpZip, dest)
+  } else {
+    // macOS ships `zip` natively. Run with cwd=srcDir and `.` as the input
+    // so manifest.json lands at the zip's root — zipping the folder itself
+    // would nest everything one level too deep and Creative Cloud wouldn't
+    // find the manifest.
+    await execa('zip', ['-r', '-X', dest, '.'], { cwd: srcDir })
+  }
+  return dest
+}
+
+async function ensureCcxReady(appCfg: AdobeAppConfig, onProgress: ProgressFn): Promise<string> {
+  return appCfg.buildCcxFromUxpFolder
+    ? buildCcxFromSource(appCfg, onProgress)
+    : ensureCcxDownloaded(appCfg, onProgress)
+}
+
 // shell.openPath never rejects — it resolves with an error string on
 // failure (e.g. no app associated with .ccx, Creative Cloud Desktop not
 // installed). Surfaced as-is so the caller/UI can decide what to show; a
@@ -381,13 +443,28 @@ export async function ensureAdobeRuntime(appCfg: AdobeAppConfig, onProgress: Pro
   onProgress('A preparar o servidor MCP...', 50)
   ensureVendoredMcpSource()
   await ensureProxyRunning(onProgress)
-  await ensureCcxDownloaded(appCfg, onProgress)
+  await ensureCcxReady(appCfg, onProgress)
   onProgress('Pronto', 95)
 
+  // BUG FIX (12 Ago 2026, found while wiring InDesign): none of ps-mcp.py/
+  // pr-mcp.py/id-mcp.py call `mcp.run()` themselves — running them directly
+  // as `uv run ps-mcp.py` executes the module (registers tools, prints the
+  // startup banner) and then just falls off the end of the file and exits,
+  // even with stdin still open. Confirmed by hand: a live subprocess pipe to
+  // `ps-mcp.py`/`id-mcp.py` this way exits within ~100ms every time — no
+  // stdio server loop ever starts, so connectStdio's initialize handshake
+  // always got "Connection closed". This means Photoshop/Premiere have
+  // never actually completed a working MCP handshake in production, despite
+  // the Settings UI showing provisioning succeed (that part never exercises
+  // a real tool call). `mcp run <file>:<object>` (the `mcp[cli]` CLI's
+  // "import approach" — see `mcp run --help`) imports the module and calls
+  // `.run()` on the named FastMCP object itself; confirmed alive with a
+  // live stdin pipe for 3s+ (vs ~100ms before) with both `mcp run` directly
+  // and through `uv run ... mcp run`.
   const withArgs = [...COMMON_WITH_DEPS, ...appCfg.extraWithDeps].flatMap((d) => ['--with', d])
   return {
     command: uvExe(),
-    args: ['run', '--no-project', '--python', PYTHON_PIN, ...withArgs, appCfg.entryScript],
+    args: ['run', '--no-project', '--python', PYTHON_PIN, ...withArgs, 'mcp', 'run', `${appCfg.entryScript}:mcp`],
     cwd: mcpDir(),
     env: buildEnv({
       UV_CACHE_DIR: path.join(runtimeDir(), 'uv-cache'),

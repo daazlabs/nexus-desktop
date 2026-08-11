@@ -104,6 +104,26 @@ const api = {
       ipcRenderer.send('nexus:connectors:premiere:install')
       return cleanup
     },
+    indesignStatus: () => ipcRenderer.invoke('nexus:connectors:indesign:status'),
+    indesignDisconnect: () => ipcRenderer.invoke('nexus:connectors:indesign:disconnect'),
+    indesignShowInstaller: () => ipcRenderer.invoke('nexus:connectors:indesign:showInstaller'),
+    indesignInstall: (
+      onProgress: (data: { step: string; pct: number }) => void,
+      onDone: (data: { ok: boolean; status?: unknown; error?: string }) => void,
+    ): (() => void) => {
+      const progressHandler = (_: any, data: { step: string; pct: number }) => onProgress(data)
+      const doneHandler = (_: any, data: { ok: boolean; status?: unknown; error?: string }) => {
+        cleanup(); onDone(data)
+      }
+      const cleanup = () => {
+        ipcRenderer.removeListener('nexus:connectors:indesign:progress', progressHandler)
+        ipcRenderer.removeListener('nexus:connectors:indesign:done', doneHandler)
+      }
+      ipcRenderer.on('nexus:connectors:indesign:progress', progressHandler)
+      ipcRenderer.on('nexus:connectors:indesign:done', doneHandler)
+      ipcRenderer.send('nexus:connectors:indesign:install')
+      return cleanup
+    },
     photoshopInstall: (
       onProgress: (data: { step: string; pct: number }) => void,
       onDone: (data: { ok: boolean; status?: unknown; error?: string }) => void,

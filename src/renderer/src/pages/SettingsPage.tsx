@@ -94,6 +94,18 @@ const CONNECTOR_REQUIREMENTS: Record<string, Record<Lang, string[]>> = {
       "Premiere Pro Beta 25.3 (build 46) or newer. It has to be the Beta build: regular Premiere doesn't load UXP plugins yet.",
     ],
   },
+  indesign: {
+    pt: [
+      "Creative Cloud Desktop instalado — é ele que instala o plugin (o ficheiro .ccx).",
+      "InDesign 20.2 ou mais recente, para suportar plugins UXP.",
+      "Ainda é uma cobertura inicial: só criar um documento novo e ler as definições do documento activo — não edita texto/blocos/estilos.",
+    ],
+    en: [
+      "Creative Cloud Desktop installed — it's what installs the plugin (the .ccx file).",
+      "InDesign 20.2 or newer, for UXP plugin support.",
+      "Still early coverage: only creating a new document and reading the active document's settings — no text/frame/style editing yet.",
+    ],
+  },
 }
 
 function Requirements({ lang, id }: { lang: Lang; id: string }) {
@@ -156,6 +168,7 @@ const CONNECTOR_CHIPS: Record<string, { label: string; bg: string }> = {
   sketchup: { label: "Su", bg: "#005F9E" },
   photoshop: { label: "Ps", bg: "#31A8FF" },
   premiere: { label: "Pr", bg: "linear-gradient(135deg,#00005B,#9999FF)" },
+  indesign: { label: "Id", bg: "#FF3366" },
 }
 function connectorChip(id: string, name: string): { label: string; bg: string } {
   return CONNECTOR_CHIPS[id] || { label: name.slice(0, 2).toUpperCase(), bg: "#6b7280" }
@@ -503,12 +516,23 @@ export default function SettingsPage({ lang, themeColor, setThemeColor, onNaviga
   const [premiereError, setPremiereError] = useState<string | null>(null)
   const [premiereDisconnecting, setPremiereDisconnecting] = useState(false)
 
+  const [indesignStatus, setIndesignStatus] = useState<{
+    supported: boolean; provisioned: boolean; proxyRunning: boolean
+    mcpConnected: boolean; pluginConnected: boolean; connected: boolean; installDir: string
+    pluginInstallerError?: string
+  } | null>(null)
+  const [indesignInstalling, setIndesignInstalling] = useState(false)
+  const [indesignProgress, setIndesignProgress] = useState<{ step: string; pct: number } | null>(null)
+  const [indesignError, setIndesignError] = useState<string | null>(null)
+  const [indesignDisconnecting, setIndesignDisconnecting] = useState(false)
+
   const loadConnectors = () => api.listConnectors().then(setConnectors).catch(() => {})
   const loadMcpServers = () => api.listMcpServers().then(setMcpServers).catch(() => {})
   const loadAutocadStatus = () => api.getAutocadStatus().then(setAutocadStatus).catch(() => {})
   const loadSketchupStatus = () => api.getSketchupStatus().then(setSketchupStatus).catch(() => {})
   const loadPhotoshopStatus = () => api.getPhotoshopStatus().then(setPhotoshopStatus).catch(() => {})
   const loadPremiereStatus = () => api.getPremiereStatus().then(setPremiereStatus).catch(() => {})
+  const loadIndesignStatus = () => api.getIndesignStatus().then(setIndesignStatus).catch(() => {})
 
   useEffect(() => {
     api.getProvidersCategorized().then(setCategorized).catch(() => {})
@@ -521,6 +545,7 @@ export default function SettingsPage({ lang, themeColor, setThemeColor, onNaviga
     loadSketchupStatus()
     loadPhotoshopStatus()
     loadPremiereStatus()
+    loadIndesignStatus()
   }, [])
 
   // Auto-detects the manual "Connect" click inside the Photoshop/Premiere
@@ -543,6 +568,15 @@ export default function SettingsPage({ lang, themeColor, setThemeColor, onNaviga
     const id = setInterval(loadPremiereStatus, 2500)
     return () => clearInterval(id)
   }, [premiereStatus])
+
+  useEffect(() => {
+    const awaitingPlugin =
+      indesignStatus?.provisioned && indesignStatus?.proxyRunning &&
+      indesignStatus?.mcpConnected && !indesignStatus?.pluginConnected
+    if (!awaitingPlugin) return
+    const id = setInterval(loadIndesignStatus, 2500)
+    return () => clearInterval(id)
+  }, [indesignStatus])
 
   // Same idea as the Photoshop/Premiere polling above: the plugin is
   // installed but only loads on SketchUp's next startup, so poll while
@@ -763,6 +797,31 @@ export default function SettingsPage({ lang, themeColor, setThemeColor, onNaviga
     }
   }
 
+  const installIndesign = () => {
+    setIndesignInstalling(true)
+    setIndesignError(null)
+    setIndesignProgress({ step: lang === "pt" ? "A começar…" : "Starting…", pct: 0 })
+    api.installIndesign(
+      (p) => setIndesignProgress(p),
+      async (res) => {
+        setIndesignInstalling(false)
+        setIndesignProgress(null)
+        if (!res.ok) setIndesignError(res.error || (lang === "pt" ? "Erro desconhecido." : "Unknown error."))
+        await loadIndesignStatus()
+      },
+    )
+  }
+
+  const disconnectIndesign = async () => {
+    setIndesignDisconnecting(true)
+    try {
+      await api.disconnectIndesign()
+      await loadIndesignStatus()
+    } finally {
+      setIndesignDisconnecting(false)
+    }
+  }
+
   const parseArgs = (text: string): string[] => text.split("\n").map(l => l.trim()).filter(Boolean)
   const parseEnv = (text: string): Record<string, string> => {
     const env: Record<string, string> = {}
@@ -887,7 +946,7 @@ export default function SettingsPage({ lang, themeColor, setThemeColor, onNaviga
         <div className="max-w-3xl mx-auto p-4 space-y-6">
           <ConnectorsSummary
             lang={lang}
-            connected={connectors.filter(c => c.status === "connected").length + [autocadStatus?.connected, sketchupStatus?.connected, photoshopStatus?.connected, premiereStatus?.connected].filter(Boolean).length}
+            connected={connectors.filter(c => c.status === "connected").length + [autocadStatus?.connected, sketchupStatus?.connected, photoshopStatus?.connected, premiereStatus?.connected, indesignStatus?.connected].filter(Boolean).length}
             total={connectors.length + 3}
           />
 
@@ -1180,6 +1239,21 @@ export default function SettingsPage({ lang, themeColor, setThemeColor, onNaviga
                 onShowInstaller={() => api.showPremiereInstaller()}
                 installWhat={adobeInstallWhat("Premiere Pro")}
                 requirementsId="premiere"
+              />
+
+              <AdobeAppCard
+                lang={lang}
+                name="InDesign"
+                status={indesignStatus}
+                installing={indesignInstalling}
+                progress={indesignProgress}
+                error={indesignError}
+                disconnecting={indesignDisconnecting}
+                onInstall={installIndesign}
+                onDisconnect={disconnectIndesign}
+                onShowInstaller={() => api.showIndesignInstaller()}
+                installWhat={adobeInstallWhat("InDesign")}
+                requirementsId="indesign"
               />
             </div>
           </section>

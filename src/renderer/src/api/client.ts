@@ -508,6 +508,44 @@ export const api = {
     return await nexusApi.connectors?.premiereShowInstaller?.()
   },
 
+  getIndesignStatus: async (): Promise<{
+    supported: boolean
+    provisioned: boolean
+    proxyRunning: boolean
+    mcpConnected: boolean
+    pluginConnected: boolean
+    connected: boolean
+    installDir: string
+    pluginInstallerError?: string
+  }> => {
+    return (
+      (await nexusApi.connectors?.indesignStatus?.()) || {
+        supported: false,
+        provisioned: false,
+        proxyRunning: false,
+        mcpConnected: false,
+        pluginConnected: false,
+        connected: false,
+        installDir: "",
+      }
+    )
+  },
+
+  installIndesign: (
+    onProgress: (data: { step: string; pct: number }) => void,
+    onDone: (data: { ok: boolean; status?: unknown; error?: string }) => void,
+  ): (() => void) => {
+    return nexusApi.connectors?.indesignInstall?.(onProgress, onDone) ?? (() => {})
+  },
+
+  disconnectIndesign: async () => {
+    return await nexusApi.connectors?.indesignDisconnect?.()
+  },
+
+  showIndesignInstaller: async () => {
+    return await nexusApi.connectors?.indesignShowInstaller?.()
+  },
+
   listMcpServers: async (): Promise<{
     id: string; command: string; args: string[]; env: Record<string, string>
     enabled: boolean; transport: "stdio" | "http"; url?: string; cwd?: string

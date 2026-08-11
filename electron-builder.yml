@@ -73,7 +73,10 @@ extraResources:
   # every installer).
   - from: ../mcp-servers/adobe-server
     to: mcp-servers/adobe-server
-    filter: ['mcp/**/*', 'LICENSE', 'NOTICE.md']
+    # uxp/**/*: added for InDesign (12 Ago 2026) — adobeRuntime.ts builds its
+    # .ccx from uxp/id/ at runtime (no upstream release ships one, unlike
+    # Photoshop/Premiere's ccxAssetName downloads) — see NOTICE.md.
+    filter: ['mcp/**/*', 'uxp/**/*', 'LICENSE', 'NOTICE.md']
   # SketchUp MCP server (vendored sketchup-mcp, see mcp-servers/sketchup-server/
   # NOTICE.md) — pure Python + one Ruby file, no node_modules. Not
   # platform-gated, same reasoning as adobe-server above: SketchUp's Ruby API
@@ -122,3 +125,13 @@ mac:
     - from: ../mcp-servers/autocad-mac-server
       to: mcp-servers/autocad-mac-server
       filter: ['src/**/*', 'requirements.txt', 'NOTICE.md']
+    # Illustrator MCP server (vendored illustrator-mcp-server, see
+    # mcp-servers/illustrator-server/NOTICE.md and
+    # PESQUISA/r-illustrator-indesign.md). Node-based like gdrive-server
+    # etc. (dist/+node_modules built by CI, see release.yml), but Mac-only
+    # by decision — mcpConnectors.ts's getIllustratorConnection() hard-gates
+    # on darwin regardless of what ships here, so this block existing only
+    # under mac: is a second, redundant layer of the same guarantee.
+    - from: ../mcp-servers/illustrator-server
+      to: mcp-servers/illustrator-server
+      filter: ['dist/**/*', 'package.json', 'node_modules/**/*', 'LICENSE', 'NOTICE.md']

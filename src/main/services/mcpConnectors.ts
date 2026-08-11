@@ -10,7 +10,7 @@ import { buildEnv } from '../mcp/resolveCommand.js'
 import * as autocadRuntime from './autocadRuntime.js'
 import * as sketchupRuntime from './sketchupRuntime.js'
 import * as adobeRuntime from './adobeRuntime.js'
-import { PHOTOSHOP, PREMIERE, type AdobeAppConfig } from './adobeRuntime.js'
+import { PHOTOSHOP, PREMIERE, INDESIGN, type AdobeAppConfig } from './adobeRuntime.js'
 import type { McpConnection } from './mcpClient.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -517,7 +517,7 @@ export type PhotoshopStatus = AdobeConnectorStatus
 // is per-app (each app's own plugin registers with the proxy separately).
 let adobeProxyRunning = false
 
-const ADOBE_APPS: AdobeAppConfig[] = [PHOTOSHOP, PREMIERE]
+const ADOBE_APPS: AdobeAppConfig[] = [PHOTOSHOP, PREMIERE, INDESIGN]
 
 interface AdobePluginPingState {
   connected: boolean
@@ -680,6 +680,19 @@ export function showPremiereInstallerInFolder(): void {
   adobeRuntime.showPluginInstallerInFolder(PREMIERE)
 }
 
+export function getIndesignStatus(): AdobeConnectorStatus {
+  return getAdobeStatus(INDESIGN)
+}
+export function installIndesign(onProgress?: (step: string, pct: number) => void): Promise<AdobeConnectorStatus> {
+  return installAdobeApp(INDESIGN, onProgress)
+}
+export function disconnectIndesign(): Promise<void> {
+  return disconnectAdobeApp(INDESIGN)
+}
+export function showIndesignInstallerInFolder(): void {
+  adobeRuntime.showPluginInstallerInFolder(INDESIGN)
+}
+
 // Tells the provider to cancel the token we were given. Fire-and-forget: the
 // local deletion below never waits on it.
 function revokeAtProvider(connectorId: string, rawBlob: string | null): void {
@@ -829,6 +842,29 @@ async function getBrowserConnection(): Promise<McpConnection | null> {
   }
 }
 
+// Illustrator has no plugin/proxy/credential either — scripting-based, not
+// CEP (see mcp-servers/illustrator-server/NOTICE.md and
+// PESQUISA/r-illustrator-indesign.md for why). Same "always available,
+// no isProvisioned() guard" shape as browser-server above, plus a hard
+// platform gate: the upstream code has a Windows (PowerShell/COM) path too,
+// but nobody — not us, not upstream — has verified it on real hardware, so
+// it stays off rather than shipping something unverified.
+async function getIllustratorConnection(): Promise<McpConnection | null> {
+  if (process.platform !== 'darwin') return null
+  const existing = connections.get('illustrator')
+  if (existing) return existing
+  try {
+    const [command, ...args] = nodeServer('illustrator-server')
+    const env = buildEnv({ ELECTRON_RUN_AS_NODE: '1' })
+    const conn = await mcpClient.connectStdio('illustrator', command, args, env)
+    connections.set('illustrator', conn)
+    return conn
+  } catch (e) {
+    console.warn(`[mcp] failed to connect 'illustrator':`, e)
+    return null
+  }
+}
+
 async function getConnection(connectorId: string): Promise<McpConnection | null> {
   const existing = connections.get(connectorId)
   if (existing) return existing
@@ -836,6 +872,7 @@ async function getConnection(connectorId: string): Promise<McpConnection | null>
   if (connectorId === 'autocad') return getAutocadConnection()
   if (connectorId === 'sketchup') return getSketchupConnection()
   if (connectorId === 'browser') return getBrowserConnection()
+  if (connectorId === 'illustrator') return getIllustratorConnection()
   const adobeApp = ADOBE_APPS.find((a) => a.id === connectorId)
   if (adobeApp) return getAdobeConnection(adobeApp)
 
@@ -965,6 +1002,30 @@ export async function listOpenAiToolsForConnectors(): Promise<any[]> {
             for (const t of mcpTools) tools.push(mcpClient.mcpToolToOpenai('browser', t))
           } catch (e2) {
             console.warn(`[mcp] listTools retry failed for 'browser':`, e2)
+          }
+        }
+      }
+    }
+  }
+  // Same "always attempted" shape as browser above — darwin-only guard is
+  // inside getIllustratorConnection() itself, so this stays a plain no-op
+  // (conn === null) on Windows/Linux, exactly like a failed connect.
+  {
+    const conn = await getIllustratorConnection()
+    if (conn) {
+      try {
+        const mcpTools = await mcpClient.listTools(conn)
+        for (const t of mcpTools) tools.push(mcpClient.mcpToolToOpenai('illustrator', t))
+      } catch (e) {
+        console.warn(`[mcp] listTools failed for 'illustrator', reconnecting:`, e)
+        connections.delete('illustrator')
+        const fresh = await getIllustratorConnection()
+        if (fresh) {
+          try {
+            const mcpTools = await mcpClient.listTools(fresh)
+            for (const t of mcpTools) tools.push(mcpClient.mcpToolToOpenai('illustrator', t))
+          } catch (e2) {
+            console.warn(`[mcp] listTools retry failed for 'illustrator':`, e2)
           }
         }
       }

@@ -426,6 +426,29 @@ export function registerIpcHandlers(): void {
     mcpConnectors.showPremiereInstallerInFolder()
   })
 
+  // Same pattern again — see mcpConnectors.installAdobeApp. InDesign's .ccx
+  // is built locally instead of downloaded (no upstream release ships one),
+  // but that's all inside adobeRuntime.ts — this IPC layer doesn't need to
+  // know the difference.
+  ipcMain.handle('nexus:connectors:indesign:status', () => mcpConnectors.getIndesignStatus())
+  ipcMain.on('nexus:connectors:indesign:install', async (event) => {
+    try {
+      const status = await mcpConnectors.installIndesign((step, pct) => {
+        event.sender.send('nexus:connectors:indesign:progress', { step, pct })
+      })
+      event.sender.send('nexus:connectors:indesign:done', { ok: true, status })
+    } catch (err: any) {
+      event.sender.send('nexus:connectors:indesign:done', { ok: false, error: err?.message || String(err) })
+    }
+  })
+  ipcMain.handle('nexus:connectors:indesign:disconnect', async () => {
+    await mcpConnectors.disconnectIndesign()
+    return mcpConnectors.getIndesignStatus()
+  })
+  ipcMain.handle('nexus:connectors:indesign:showInstaller', () => {
+    mcpConnectors.showIndesignInstallerInFolder()
+  })
+
   // Custom MCP servers (e.g. AutoCAD): user-configurable command+args
   // servers, on top of the hardcoded first-party connectors above.
   ipcMain.handle('nexus:mcp:list', () => customMcpServers.listServers())
