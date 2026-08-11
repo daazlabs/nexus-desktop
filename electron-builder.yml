@@ -132,6 +132,18 @@ mac:
     # by decision — mcpConnectors.ts's getIllustratorConnection() hard-gates
     # on darwin regardless of what ships here, so this block existing only
     # under mac: is a second, redundant layer of the same guarantee.
-    - from: ../mcp-servers/illustrator-server
-      to: mcp-servers/illustrator-server
-      filter: ['dist/**/*', 'package.json', 'node_modules/**/*', 'LICENSE', 'NOTICE.md']
+    #
+    # from: is the *parent* (../mcp-servers), not ../mcp-servers/illustrator-
+    # server directly — same node_modules-at-root gotcha as the base
+    # gdrive-server-etc. block above (electron-builder silently drops a
+    # node_modules/ that sits at the copied folder's root). Learned this the
+    # hard way: v1.0.40's release build failed exactly on this (see
+    # "Verify the packaged app really contains the connectors").
+    - from: ../mcp-servers
+      to: mcp-servers
+      filter:
+        - 'illustrator-server/dist/**/*'
+        - 'illustrator-server/package.json'
+        - 'illustrator-server/node_modules/**/*'
+        - 'illustrator-server/LICENSE'
+        - 'illustrator-server/NOTICE.md'
