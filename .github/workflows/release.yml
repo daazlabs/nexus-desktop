@@ -110,7 +110,7 @@ jobs:
           # see mcp-servers/illustrator-server/NOTICE.md) but has no native
           # deps, so building it on every matrix leg is harmless; only the
           # mac leg's electron-builder.yml actually bundles the result.
-          for d in gdrive-server gmail-server wordpress-server n8n-server magnific-server browser-server illustrator-server; do
+          for d in gdrive-server gmail-server wordpress-server n8n-server magnific-server browser-server illustrator-server linkedin-server; do
             echo "== building $d"
             (cd "../mcp-servers/$d" && npm ci && npm run build && npm prune --omit=dev)
           done
@@ -124,6 +124,7 @@ jobs:
         env:
           GOOGLE_DESKTOP_CLIENT_JSON: ${{ secrets.GOOGLE_DESKTOP_CLIENT_JSON }}
           CANVA_CLIENT_JSON: ${{ secrets.CANVA_CLIENT_JSON }}
+          LINKEDIN_CLIENT_JSON: ${{ secrets.LINKEDIN_CLIENT_JSON }}
         run: |
           mkdir -p build-oauth
           if [ -n "$GOOGLE_DESKTOP_CLIENT_JSON" ]; then
@@ -132,6 +133,15 @@ jobs:
           if [ -n "$CANVA_CLIENT_JSON" ]; then
             printf '%s' "$CANVA_CLIENT_JSON" > build-oauth/canva-desktop-client.json
           fi
+          # Unlike Google/Canva above, not required for the build to be
+          # valid — LinkedIn needs a manually-registered app first (see
+          # mcp-servers/linkedin-server/NOTICE.md), so this secret may not
+          # exist yet. When it doesn't, the LinkedIn card just shows "not
+          # configured" on every install, same as before this connector
+          # existed — never a build failure.
+          if [ -n "$LINKEDIN_CLIENT_JSON" ]; then
+            printf '%s' "$LINKEDIN_CLIENT_JSON" > build-oauth/linkedin-desktop-client.json
+          fi
 
       # electron-builder only *warns* about missing extraResources, so a
       # broken bundle would silently ship again. Fail here instead.
@@ -139,7 +149,7 @@ jobs:
         shell: bash
         run: |
           missing=0
-          for d in gdrive-server gmail-server wordpress-server n8n-server magnific-server browser-server illustrator-server; do
+          for d in gdrive-server gmail-server wordpress-server n8n-server magnific-server browser-server illustrator-server linkedin-server; do
             for p in dist/index.js package.json node_modules; do
               [ -e "../mcp-servers/$d/$p" ] || { echo "MISSING: mcp-servers/$d/$p"; missing=1; }
             done
@@ -167,7 +177,7 @@ jobs:
           # source tree alone is what let v1.0.31 ship with dist/ but no
           # node_modules — electron-builder silently dropped them (see the
           # extraResources comment in electron-builder.yml).
-          for d in gdrive-server gmail-server wordpress-server n8n-server magnific-server browser-server illustrator-server; do
+          for d in gdrive-server gmail-server wordpress-server n8n-server magnific-server browser-server illustrator-server linkedin-server; do
             [ -e "../mcp-servers/$d/node_modules/@modelcontextprotocol/sdk/package.json" ] \
               || { echo "MISSING: mcp-servers/$d/node_modules/@modelcontextprotocol/sdk"; missing=1; }
           done
@@ -196,7 +206,7 @@ jobs:
           [ -n "$out" ] || { echo "Could not find the unpacked app under dist/"; exit 1; }
           res="$out/Resources"; [ -d "$res" ] || res="$out/resources"
           missing=0
-          for d in gdrive-server gmail-server wordpress-server n8n-server magnific-server browser-server; do
+          for d in gdrive-server gmail-server wordpress-server n8n-server magnific-server browser-server linkedin-server; do
             for p in dist/index.js node_modules/@modelcontextprotocol/sdk/package.json; do
               [ -e "$res/mcp-servers/$d/$p" ] || { echo "MISSING in package: $d/$p"; missing=1; }
             done

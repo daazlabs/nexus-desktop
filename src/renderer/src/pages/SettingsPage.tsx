@@ -161,6 +161,7 @@ const CONNECTOR_CHIPS: Record<string, { label: string; bg: string }> = {
   gdrive: { label: "GD", bg: "linear-gradient(135deg,#4285F4,#34A853)" },
   gmail: { label: "GM", bg: "linear-gradient(135deg,#EA4335,#FBBC05)" },
   canva: { label: "Cv", bg: "linear-gradient(135deg,#7d2ae8,#00c4cc)" },
+  linkedin: { label: "in", bg: "#0A66C2" },
   wordpress: { label: "Wp", bg: "#21759B" },
   n8n: { label: "n8n", bg: "#EA4B71" },
   magnific: { label: "Mg", bg: "#6c5ce7" },

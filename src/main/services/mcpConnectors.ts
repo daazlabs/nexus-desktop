@@ -94,6 +94,11 @@ function loadDesktopOAuthClient(providerId: string, envPrefix: string): { client
 
 const { clientId: GOOGLE_DESKTOP_CLIENT_ID, clientSecret: GOOGLE_DESKTOP_CLIENT_SECRET } = loadDesktopOAuthClient('google', 'GOOGLE_DESKTOP')
 const { clientId: CANVA_CLIENT_ID, clientSecret: CANVA_CLIENT_SECRET } = loadDesktopOAuthClient('canva', 'CANVA')
+// No DCR for LinkedIn (unlike Canva) — the user registers an app by hand at
+// linkedin.com/developers/apps and drops the client id/secret in via the
+// same env-var-or-~/.daaznexus-file mechanism as Google. See
+// mcp-servers/linkedin-server/NOTICE.md for the manual setup steps.
+const { clientId: LINKEDIN_CLIENT_ID, clientSecret: LINKEDIN_CLIENT_SECRET } = loadDesktopOAuthClient('linkedin', 'LINKEDIN_DESKTOP')
 
 // Canva's OAuth server (unlike Google's "Desktop app" client type) validates
 // redirect_uri by exact match against what was registered via Dynamic Client
@@ -101,6 +106,10 @@ const { clientId: CANVA_CLIENT_ID, clientSecret: CANVA_CLIENT_SECRET } = loadDes
 // ports the way Google does. So this fixed port must match the redirect_uris
 // used at registration time (see mcp-servers docs / setup notes).
 const CANVA_REDIRECT_PORT = 53791
+// LinkedIn also validates by exact match, and we couldn't confirm it exempts
+// the port the way Google does (see mcp-servers/linkedin-server/NOTICE.md) —
+// same fixed-port treatment as Canva, just a different port.
+const LINKEDIN_REDIRECT_PORT = 53792
 
 const OAUTH_PROVIDERS: Record<string, { authorizeUrl: string; tokenUrl: string; revokeUrl?: string; clientId: string; clientSecret?: string; extraAuthorizeParams?: Record<string, string>; fixedPort?: number; clientAuthMethod?: 'body' | 'basic' }> = {
   google: {
@@ -131,6 +140,17 @@ const OAUTH_PROVIDERS: Record<string, { authorizeUrl: string; tokenUrl: string; 
     // an HTTP Basic header at the token endpoint, not as body fields.
     clientAuthMethod: 'basic',
   },
+  // No revokeUrl — LinkedIn has no publicly documented token-revocation
+  // endpoint; disconnecting just forgets the token locally, same as GitHub's
+  // PAT flow. clientAuthMethod left at the default ('body'): LinkedIn's
+  // token endpoint takes client_id/client_secret as normal POST fields.
+  linkedin: {
+    authorizeUrl: 'https://www.linkedin.com/oauth/v2/authorization',
+    tokenUrl: 'https://www.linkedin.com/oauth/v2/accessToken',
+    clientId: LINKEDIN_CLIENT_ID,
+    clientSecret: LINKEDIN_CLIENT_SECRET,
+    fixedPort: LINKEDIN_REDIRECT_PORT,
+  },
 }
 
 // Must match backend/services/oauth_broker.py's CONNECTOR_SCOPES exactly —
@@ -141,6 +161,10 @@ const CONNECTOR_SCOPES: Record<string, string[]> = {
     'https://www.googleapis.com/auth/gmail.readonly',
     'https://www.googleapis.com/auth/gmail.send',
   ],
+  // w_member_social (post as the member) is auto-approved on app creation,
+  // same as openid/profile — no LinkedIn review needed for these three. See
+  // mcp-servers/linkedin-server/NOTICE.md.
+  linkedin: ['openid', 'profile', 'w_member_social'],
 }
 
 // Which account is this connected to? Asked once at connect time and stored
@@ -164,6 +188,11 @@ const ACCOUNT_ENDPOINT: Record<string, { url: string; authHeader?: (token: strin
   github: {
     url: 'https://api.github.com/user',
     pick: (d) => d?.login,
+  },
+  // Same OIDC userinfo endpoint linkedin-server's get_profile tool calls.
+  linkedin: {
+    url: 'https://api.linkedin.com/v2/userinfo',
+    pick: (d) => d?.name,
   },
 }
 
@@ -198,6 +227,7 @@ const CONNECTOR_PROVIDER: Record<string, string> = {
   gdrive: 'google',
   gmail: 'google',
   canva: 'canva',
+  linkedin: 'linkedin',
 }
 
 // Phase 1 wired up GitHub (remote MCP server, PAT auth, zero subprocesses).
@@ -233,6 +263,19 @@ const CONNECTOR_DEFS: Record<string, ConnectorDef> = {
     authMethod: 'oauth',
     command: nodeServer('gdrive-server'),
     buildEnv: (token) => ({ GOOGLE_ACCESS_TOKEN: token }),
+  },
+  // First-party server, own REST calls (no LinkedIn SDK exists) — see
+  // mcp-servers/linkedin-server/NOTICE.md. Needs a manually-registered
+  // LinkedIn app (no DCR like Canva) before OAUTH_PROVIDERS.linkedin has a
+  // client id/secret — isOAuthConfigured() correctly shows "not configured"
+  // on the card until then, same as any other connector without a client.
+  linkedin: {
+    id: 'linkedin',
+    name: 'LinkedIn',
+    transport: 'stdio',
+    authMethod: 'oauth',
+    command: nodeServer('linkedin-server'),
+    buildEnv: (token) => ({ LINKEDIN_ACCESS_TOKEN: token }),
   },
   gmail: {
     id: 'gmail',

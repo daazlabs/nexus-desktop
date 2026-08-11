@@ -63,6 +63,9 @@ extraResources:
       - 'browser-server/dist/**/*'
       - 'browser-server/package.json'
       - 'browser-server/node_modules/**/*'
+      - 'linkedin-server/dist/**/*'
+      - 'linkedin-server/package.json'
+      - 'linkedin-server/node_modules/**/*'
   # Adobe MCP server (vendored adb-mcp, see mcp-servers/adobe-server/
   # NOTICE.md) — pure Python source, no node_modules to bundle. Not
   # platform-gated like autocad-server below: Photoshop runs on both macOS
