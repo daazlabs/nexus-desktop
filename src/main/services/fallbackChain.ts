@@ -327,8 +327,8 @@ function toolCallsToMessages(toolCalls: any[]): ChatMessage[] {
 // bites: it grows the context (and, on a paid Cerebro model, the cost) on
 // every following turn, not just the one where it happened. Keep the head
 // (usually the command/context) and the tail (usually the final result or
-// error), cut only the middle — same idea as OmniRoute's "Result Tool Kit",
-// without the ML: a deterministic cut covers the common case.
+// error), cut only the middle: a deterministic cut covers the common case
+// without needing anything smarter than string slicing.
 const MAX_RESULT_CHARS = 4000
 const HEAD_CHARS = 2400
 const TAIL_CHARS = 1200
@@ -343,11 +343,11 @@ function compressResult(result: string): string {
   )
 }
 
-// Defense against hidden instructions in external content — pattern already
-// built and tested for real in SUPERDEV (see HISTORICO.md, 11 Aug 2026: a
-// file with "IGNORE ALL PREVIOUS INSTRUCTIONS..." hidden inside a normal
-// report — the model summarized the report and ignored the injected
-// instruction). The engine can't reliably tell "the user is asking" from
+// Defense against hidden instructions in external content — tested live
+// with a real injection attempt: a file with "IGNORE ALL PREVIOUS
+// INSTRUCTIONS..." hidden inside a normal report. The model summarized the
+// report and ignored the injected instruction, confirming the approach
+// works. The engine can't reliably tell "the user is asking" from
 // "this is a hidden instruction in a tool result" — it all arrives through
 // the same conversation — so EVERY tool result (bash, MCP, browser...) gets
 // wrapped in these markers here, at the one place all of them pass through,

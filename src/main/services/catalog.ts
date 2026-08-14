@@ -137,8 +137,8 @@ const ZHIPU = provider('zhipu', 'Zhipu AI (Z.ai)', 'https://open.bigmodel.cn/api
   ],
 )
 
-// Added 14 Aug 2026 (comparison with OmniRoute's catalog) — real API
-// confirmed at docs.siliconflow.com: base_url and free-key page verified,
+// Added 14 Aug 2026 — real API confirmed at docs.siliconflow.com:
+// base_url and free-key page verified,
 // Qwen3-8B and DeepSeek-R1-Distill-Qwen-7B documented as $0, no card, up to
 // 1000 RPM / 50K TPM. tools:false on purpose — no confirmation found of
 // function-calling for these two specific models, same rule already used

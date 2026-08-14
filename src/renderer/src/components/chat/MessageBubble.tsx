@@ -54,11 +54,11 @@ const BROWSER_LABELS: Record<string, (args: Record<string, unknown>, lang: Lang)
 }
 
 // Persistent "is it still alive?" line — separate from the tool-call list
-// below and from the message content itself (inspired by opencode's
-// session/status.ts: a status channel that never gets baked into the
-// answer text). Main process sends this through the same __TOOL_EVENT__
-// channel as real tool calls, with the reserved id "status" and
-// name "__status__" — see ipc/tools.ts and services/fallbackChain.ts.
+// below and from the message content itself, a status channel that never
+// gets baked into the answer text. Main process sends this through the
+// same __TOOL_EVENT__ channel as real tool calls, with the reserved id
+// "status" and name "__status__" — see ipc/tools.ts and
+// services/fallbackChain.ts.
 function describeStatusEvent(ev: ToolEvent, lang: Lang): string | null {
   const kind = (ev.arguments as Record<string, unknown> | undefined)?.kind
   if (kind === "retrying") {

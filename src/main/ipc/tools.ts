@@ -534,11 +534,11 @@ export function registerIpcHandlers(): void {
     // conversation) instead of one clobbering another.
     const requestPermission = (action: string, detail: string) =>
       checkOrRequestPermission(action, detail, 60000, { convId: options?.convId })
-    // Estado "está vivo?" à parte do conteúdo da resposta — inspirado no
-    // opencode (session/status.ts): "busy" cobre a volta toda (pensar,
-    // ferramentas, troca de modelo, tudo), nunca é misturado no texto da
-    // resposta. Reaproveita o mesmo canal `notifyTool` (__TOOL_EVENT__),
-    // sem plumbing novo — o renderer já sabe processar este canal.
+    // Estado "está vivo?" à parte do conteúdo da resposta — "busy" cobre a
+    // volta toda (pensar, ferramentas, troca de modelo, tudo), nunca é
+    // misturado no texto da resposta. Reaproveita o mesmo canal `notifyTool`
+    // (__TOOL_EVENT__), sem plumbing novo — o renderer já sabe processar
+    // este canal.
     notifyTool({ id: 'status', name: '__status__', args: { kind: 'busy' }, status: 'running', started_at: Date.now() })
     try {
       const enrichedMessages = await withWebSearchEnrichment(messages, options?.modelClass)
