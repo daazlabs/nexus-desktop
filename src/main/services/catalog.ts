@@ -58,7 +58,15 @@ const OPENROUTER = provider('openrouter', 'OpenRouter', 'https://openrouter.ai/a
     model('nousresearch/hermes-3-llama-3.1-405b:free', 131072, { tools: true, free: true, intelligenceScore: 8, speedScore: 3 }),
     model('cognitivecomputations/dolphin-mistral-24b-venice-edition:free', 32768, { tools: true, free: true, intelligenceScore: 6, speedScore: 6 }),
     model('poolside/laguna-m.1:free', 262144, { tools: true, free: true, intelligenceScore: 7, speedScore: 5 }),
-    model('poolside/laguna-xs.2:free', 262144, { tools: true, free: true, intelligenceScore: 6, speedScore: 7 }),
+    // tools:false — observed live 14 Aug 2026 (Desktop, via OpenRouter)
+    // writing the tool call as literal text — "<tool_call>bash<arg_key>
+    // command</arg_key>...</tool_call>" inside the response itself, instead
+    // of a real function call — typical of models fine-tuned on the
+    // Hermes/Qwen convention (XML embedded in text) when the proxy doesn't
+    // translate that back into structured tool_calls. laguna-m.1 (bigger
+    // sibling, untested) stays tools:true for now — no evidence it shares
+    // the same problem.
+    model('poolside/laguna-xs.2:free', 262144, { tools: false, free: true, intelligenceScore: 6, speedScore: 7 }),
   ],
 )
 
@@ -129,6 +137,20 @@ const ZHIPU = provider('zhipu', 'Zhipu AI (Z.ai)', 'https://open.bigmodel.cn/api
   ],
 )
 
+// Added 14 Aug 2026 (comparison with OmniRoute's catalog) — real API
+// confirmed at docs.siliconflow.com: base_url and free-key page verified,
+// Qwen3-8B and DeepSeek-R1-Distill-Qwen-7B documented as $0, no card, up to
+// 1000 RPM / 50K TPM. tools:false on purpose — no confirmation found of
+// function-calling for these two specific models, same rule already used
+// elsewhere in this catalog (e.g. Cerebras gpt-oss-120b). Confirm live
+// before flipping to true.
+const SILICONFLOW = provider('siliconflow', 'SiliconFlow', 'https://api.siliconflow.com/v1', 'openai',
+  'https://cloud.siliconflow.com/account/ak', [
+    model('Qwen/Qwen3-8B', 32768, { tools: false, free: true, intelligenceScore: 6, speedScore: 7 }),
+    model('deepseek-ai/DeepSeek-R1-Distill-Qwen-7B', 32768, { tools: false, free: true, intelligenceScore: 6, speedScore: 7 }),
+  ],
+)
+
 const MISTRAL = provider('mistral', 'Mistral AI', 'https://api.mistral.ai/v1', 'openai',
   'https://console.mistral.ai/api-keys/', [
     model('mistral-large-latest', 262144, { tools: true, paid: true, intelligenceScore: 8, speedScore: 5 }),
@@ -150,7 +172,15 @@ const COHERE = provider('cohere', 'Cohere', 'https://api.cohere.ai/compatibility
 const KILO = provider('kilo', 'Kilo Gateway', 'https://api.kilo.ai/api/gateway/v1', 'openai',
   'https://kilo.ai/', [
     model('poolside/laguna-m.1:free', 262144, { tools: true, free: true, intelligenceScore: 7, speedScore: 5 }),
-    model('poolside/laguna-xs.2:free', 262144, { tools: true, free: true, intelligenceScore: 6, speedScore: 7 }),
+    // tools:false — observed live 14 Aug 2026 (Desktop, via OpenRouter)
+    // writing the tool call as literal text — "<tool_call>bash<arg_key>
+    // command</arg_key>...</tool_call>" inside the response itself, instead
+    // of a real function call — typical of models fine-tuned on the
+    // Hermes/Qwen convention (XML embedded in text) when the proxy doesn't
+    // translate that back into structured tool_calls. laguna-m.1 (bigger
+    // sibling, untested) stays tools:true for now — no evidence it shares
+    // the same problem.
+    model('poolside/laguna-xs.2:free', 262144, { tools: false, free: true, intelligenceScore: 6, speedScore: 7 }),
     model('nvidia/nemotron-3-super-120b-a12b:free', 1000000, { tools: true, free: true, intelligenceScore: 8, speedScore: 5 }),
     model('stepfun/step-3.7-flash:free', 262144, { tools: true, free: true, intelligenceScore: 7, speedScore: 8 }),
   ],
@@ -279,7 +309,7 @@ const OLLAMA = provider('ollama', 'Ollama (local)', 'http://localhost:11434/v1',
 // Bundled (compile-time) catalog. Used as the initial effective catalog and
 // as the fallback when the remote catalog is unavailable.
 export const PROVIDERS: ProviderInfo[] = [
-  GROQ, OPENROUTER, GEMINI, GITHUB, CEREBRAS, NVIDIA, CLOUDFLARE, ZHIPU,
+  GROQ, OPENROUTER, GEMINI, GITHUB, CEREBRAS, NVIDIA, CLOUDFLARE, ZHIPU, SILICONFLOW,
   KILO, POLLINATIONS, OVH, OPENCODE_ZEN,
   DEEPSEEK, MISTRAL, ANTHROPIC, OPENAI, XAI, PERPLEXITY, COHERE, TOGETHER, REPLICATE, HUGGINGFACE,
   LLAMACPP, OLLAMA,

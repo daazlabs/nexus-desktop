@@ -53,6 +53,27 @@ const BROWSER_LABELS: Record<string, (args: Record<string, unknown>, lang: Lang)
   browser_close: (_a, lang) => (lang === "en" ? "closing browser" : "a fechar o browser"),
 }
 
+// Persistent "is it still alive?" line — separate from the tool-call list
+// below and from the message content itself (inspired by opencode's
+// session/status.ts: a status channel that never gets baked into the
+// answer text). Main process sends this through the same __TOOL_EVENT__
+// channel as real tool calls, with the reserved id "status" and
+// name "__status__" — see ipc/tools.ts and services/fallbackChain.ts.
+function describeStatusEvent(ev: ToolEvent, lang: Lang): string | null {
+  const kind = (ev.arguments as Record<string, unknown> | undefined)?.kind
+  if (kind === "retrying") {
+    const model = String((ev.arguments as any)?.model ?? "")
+    const reason = String((ev.arguments as any)?.reason ?? "")
+    return lang === "en"
+      ? `${model} failed (${reason}) — switching to another model…`
+      : `${model} falhou (${reason}) — a mudar de modelo…`
+  }
+  if (kind === "busy") {
+    return lang === "en" ? "working…" : "a trabalhar…"
+  }
+  return null // "idle" (or unknown) — nothing to show
+}
+
 function describeToolEvent(tc: ToolEvent, lang: Lang): string {
   if (tc.name.startsWith("mcp__browser__")) {
     const base = tc.name.slice("mcp__browser__".length)
@@ -169,18 +190,38 @@ function MessageBubble({ lang, msg, streamingContent, toolEvents, isStreaming, s
 
         {isStreaming ? (
           <>
-            {showToolEvents && toolEvents.length > 0 && (
-              <div className="space-y-1 mb-2 pb-2 border-b border-border/50">
-                {toolEvents.map((tc) => (
-                  <div key={tc.id} className="flex items-center gap-2 text-xs text-muted-foreground">
-                    <span className={tc.status === "running" ? "animate-pulse" : ""}>
-                      {tc.status === "running" ? "●" : tc.status === "completed" ? "✓" : "✗"}
-                    </span>
-                    <code>{describeToolEvent(tc, lang)}</code>
-                  </div>
-                ))}
-              </div>
-            )}
+            {(() => {
+              // "status" is a reserved pseudo tool-event (id "status", name
+              // "__status__") — never part of the real tool-call list below,
+              // shown on its own line regardless of showToolEvents: whether
+              // the request is still alive isn't a "tool detail" preference,
+              // it's the thing this whole indicator exists for.
+              const statusEv = toolEvents.find(tc => tc.name === "__status__")
+              const label = statusEv ? describeStatusEvent(statusEv, lang) : null
+              if (!label) return null
+              return (
+                <div className="flex items-center gap-2 text-xs text-muted-foreground mb-2">
+                  <span className="animate-pulse">●</span>
+                  <span>{label}</span>
+                </div>
+              )
+            })()}
+            {(() => {
+              const realToolEvents = toolEvents.filter(tc => tc.name !== "__status__")
+              if (!showToolEvents || realToolEvents.length === 0) return null
+              return (
+                <div className="space-y-1 mb-2 pb-2 border-b border-border/50">
+                  {realToolEvents.map((tc) => (
+                    <div key={tc.id} className="flex items-center gap-2 text-xs text-muted-foreground">
+                      <span className={tc.status === "running" ? "animate-pulse" : ""}>
+                        {tc.status === "running" ? "●" : tc.status === "completed" ? "✓" : "✗"}
+                      </span>
+                      <code>{describeToolEvent(tc, lang)}</code>
+                    </div>
+                  ))}
+                </div>
+              )
+            })()}
             {(() => {
               const { thinking, thinkingDone, visible } = extractStream(streamingContent)
               return (
