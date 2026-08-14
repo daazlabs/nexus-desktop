@@ -1,122 +1,83 @@
 # DaazNexus Desktop
 
-Chat com 30+ modelos de IA num único app. Versão desktop do [chat.daazlabs.com](https://chat.daazlabs.com) — sem servidor, sem login, tudo local.
+A free desktop AI chat client that routes every message across 30+ LLM providers — free and paid — with automatic fallback, and gives the model real access to your own computer when you want it to.
 
----
+[![Latest release](https://img.shields.io/github/v/release/daazlabs/nexus-desktop)](https://github.com/daazlabs/nexus-desktop/releases/latest)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey)](https://github.com/daazlabs/nexus-desktop/releases/latest)
 
 ## Download
 
-**[→ Descarregar a última versão](https://github.com/daazlabs/nexus-desktop/releases/latest)**
+Grab the installer for your OS from the [latest release](https://github.com/daazlabs/nexus-desktop/releases/latest):
 
-| Sistema | Ficheiro |
-|---------|----------|
+| OS | File |
+|---|---|
+| macOS (Apple Silicon) | `DaazNexus-*-arm64.dmg` |
 | Windows | `DaazNexus-Setup-*.exe` |
-| macOS (Apple Silicon / Intel) | `DaazNexus-*-arm64.dmg` |
-| Linux | `DaazNexus-*.AppImage` ou `nexus-desktop_*.deb` |
+| Linux | `DaazNexus-*.AppImage` (portable) or `nexus-desktop_*_amd64.deb` |
 
----
+No account required to start — bring your own API key for any provider you want to use, or run fully offline with a local model (Ollama / llama.cpp).
 
-## Instalação
+## What it does
 
-### Windows
+DaazNexus Desktop is one chat app in front of many models, with two modes:
 
-1. Descarregar o ficheiro `.exe`
-2. Executar o instalador
-3. O app abre directamente — adicionar a API key em Settings para começar
+- **PLAN mode** (default) — a normal chat, read-only, no access to your machine.
+- **BUILD mode** — the model gets real tools (read/write files, run shell commands, browse the web with a real Chromium window) to actually get work done, with a permission popup before every risky action.
 
-### Linux
+### Provider routing
 
-**AppImage:**
-```bash
-chmod +x DaazNexus-*.AppImage
-./DaazNexus-*.AppImage
-```
+- **30+ providers** wired in out of the box — OpenAI, Anthropic, Gemini, Groq, OpenRouter, Cerebras, NVIDIA NIM, Cloudflare Workers AI, Mistral, Cohere, DeepSeek, xAI, Perplexity, Together, Replicate, HuggingFace, and several keyless free providers (Pollinations, Kilo, OVH, OpenCode Zen) — plus local models via Ollama and llama.cpp.
+- **Three routing classes**: *Cerebro* (paid models, only used when you explicitly pick them), *Trabalhador* (free tiers, used by default), *Local* (on-device, for private or offline work).
+- **Automatic fallback** — if a model is rate-limited or errors out mid-response, the chain moves to the next one without losing what was already done (tool calls already executed are summarized for the next model, not thrown away).
+- **Exponential backoff + history-aware ordering** — a model that just failed is deprioritized for a while, even after its own cooldown ends.
+- **Live status** — a persistent "still working" / "switching model" indicator, separate from the answer text, so a retry or a long tool call never looks like the app froze.
 
-**Debian/Ubuntu (.deb):**
-```bash
-sudo dpkg -i nexus-desktop_*.deb
-```
+### Real tools (BUILD mode)
 
----
+- Filesystem: read/write/list/delete files, search content, list code symbols.
+- Shell: run bash commands.
+- Office documents: generate real `.xlsx`, `.docx`, `.pptx`, and PDF files.
+- Browser automation: a real, visible Chromium window with a persistent session (stays logged in across uses).
+- Every action outside your own explicit instructions (a web page, a file's content, a tool result) is fenced off from being treated as a command — a page can't trick the model into "forgetting" your instructions.
 
-### macOS — Instrução importante
+### Connectors
 
-O app não está assinado com certificado Apple. O macOS pode mostrar o erro **"DaazNexus está danificado e não pode ser aberto"** ao tentar instalar. Isto é normal para apps independentes — não é um vírus.
+First-party: GitHub, Google Drive, Gmail, WordPress, LinkedIn, Canva, n8n, Magnific, Photoshop, Premiere, InDesign, Illustrator.
 
-**Como resolver (escolhe uma das opções):**
+Bring your own: a generic custom MCP server panel — point it at any local MCP server (stdio or HTTP), the same config shape as Claude Desktop / Cursor use, so you can reuse a server you already have configured elsewhere.
 
-#### Opção A — Antes de instalar (recomendada)
+### Memory & skills
 
-No Terminal, antes de montar o DMG:
+- Automatic memory — the app learns durable facts about you and your projects across conversations, without you asking it to.
+- Skills — teach it a reusable procedure once, invoke it by name later.
+- Web search — decided by a small free model (not a keyword list), reranked by embeddings, with source citations.
 
-```bash
-xattr -d com.apple.quarantine ~/Downloads/DaazNexus-*.dmg
-```
+### Privacy
 
-Depois abre o DMG e arrasta o app para Applications normalmente.
+- Single-user, local-first — no account, no JWT, nothing leaves your machine except the API calls you explicitly make to the provider you chose.
+- API keys are stored locally, never sent anywhere but the provider they belong to.
+- A "Local" routing class exists specifically for anything you don't want leaving your computer at all.
 
-#### Opção B — Depois de instalar
-
-Se já instalaste e deu erro:
-
-```bash
-sudo xattr -rd com.apple.quarantine /Applications/DaazNexus.app
-```
-
-#### Opção C — Sem terminal (mais fácil)
-
-1. No Finder, **clica com o botão direito** no DMG → **"Abrir"**
-2. No diálogo de aviso, clica **"Abrir"** novamente
-3. Arrasta para Applications
-4. Na primeira vez que abrires o app, volta a fazer **botão direito → "Abrir"**
-
-O macOS vai lembrar a tua escolha e não volta a pedir.
-
-#### Opção D — Script automático (recomendada para atualizações)
-
-Como o macOS nunca completa o update automático sozinho (app não assinada), a forma mais rápida de atualizar é:
-
-1. Descarrega o `.dmg` da [última versão](https://github.com/daazlabs/nexus-desktop/releases/latest) — fica em `~/Downloads`
-2. Descarrega o [`install-mac.command`](https://raw.githubusercontent.com/daazlabs/nexus-desktop/main/install-mac.command)
-3. Dá duplo-clique no `install-mac.command` no Finder
-
-O script remove a quarentena, substitui a versão antiga em `/Applications` e pergunta se queres abrir o app — tudo automático, sem arrastar nada.
-
-> Se o Finder recusar abrir o `.command` por não ter permissão de execução, corre uma vez no Terminal: `chmod +x ~/Downloads/install-mac.command`
-
----
-
-## Funcionalidades
-
-- **30+ providers de IA** — Groq, Gemini, OpenRouter, DeepSeek, Claude, GPT-4, Ollama, llama.cpp e mais
-- **Modo Auto** — escolhe o melhor modelo disponível automaticamente
-- **Tools nativas** — acesso ao sistema de ficheiros, bash, com popup de permissão
-- **Projectos** — agrupa conversas por projecto com instruções customizadas
-- **Offline** — modelos locais via Ollama ou llama.cpp sem internet
-- **Memórias** — guarda factos sobre ti entre conversas
-- **Streaming** — respostas em tempo real
-- **Sem login** — app local, as tuas chaves ficam encriptadas no teu computador
-
----
-
-## Primeiros passos
-
-1. Abre o app → vai para **Settings**
-2. Adiciona pelo menos uma API key (Groq é gratuito: [console.groq.com/keys](https://console.groq.com/keys))
-3. Volta ao chat e começa a conversar
-
-Para modelos locais, instala [Ollama](https://ollama.com/download) e corre `ollama pull qwen3.5:9b`.
-
----
-
-## Construir a partir do código
+## Development
 
 ```bash
 git clone https://github.com/daazlabs/nexus-desktop.git
 cd nexus-desktop
 npm install
-cd src/renderer && npm install && cd ../..
-npm run build
-npm run start        # desenvolvimento
-npm run dist         # empacotar para distribuição
+npm run dev          # renderer + Electron, with hot reload
 ```
+
+Build a production package for your current OS:
+
+```bash
+npm run dist          # builds renderer + main, then packages with electron-builder
+```
+
+## Contributing
+
+Bug reports, feature requests, and pull requests are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for how to set up a dev environment and what a good PR looks like.
+
+## License
+
+[MIT](LICENSE) — do whatever you want with it, just keep the copyright notice.

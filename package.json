@@ -3,6 +3,10 @@
   "version": "1.0.44",
   "description": "DaazNexus Desktop — Electron client",
   "desktopName": "com.daazlabs.DaazNexus",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/daazlabs/nexus-desktop.git"
+  },
   "main": "dist-electron/main/index.js",
   "scripts": {
     "dev:renderer": "npm --prefix src/renderer run dev",
@@ -39,6 +43,6 @@
     "email": "dev@daazlabs.com"
   },
   "homepage": "https://chat.daazlabs.com",
-  "license": "ISC",
+  "license": "MIT",
   "type": "module"
 }
