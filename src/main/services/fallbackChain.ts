@@ -313,7 +313,7 @@ async function executeToolCall(
     // extraction (memoryExtraction.ts).
     const targetClass = callerModelClass === 'local' ? 'local' : 'trabalhador'
     const tarefa = String(args.tarefa || '')
-    const enrichment = await maybeEnrichWithWeb(tarefa)
+    const enrichment = await maybeEnrichWithWeb(tarefa, callerModelClass)
     const subMessages: ChatMessage[] = enrichment
       ? [{ role: 'user', content: tarefa }, { role: 'system', content: enrichment }]
       : [{ role: 'user', content: tarefa }]

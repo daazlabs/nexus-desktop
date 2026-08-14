@@ -3,95 +3,168 @@
 // knowledge for anything time-sensitive. Deliberately NOT gated behind BUILD mode:
 // unlike bash/write_file, a read-only web search carries none of the risk PLAN mode
 // exists to block, so it runs regardless of which mode the user is in.
+import type { ChatMessage, ChatResult } from './providerClients.js'
+
 const SEARXNG_URL = process.env.SEARXNG_URL || 'http://127.0.0.1:8888'
 
-// Same keyword heuristic as the backend (services/web_search.py) — kept in sync
-// deliberately, both sides should trigger enrichment on the same kinds of questions.
+// Histórico: até 14 Ago 2026 a decisão "isto precisa de pesquisa web?" era uma
+// lista fixa de ~60 palavras-chave PT/EN, duplicada à mão aqui e em
+// backend/services/web_search.py — o comentário antigo dizia "kept in sync
+// deliberately", um cheiro de manutenção a sério. Fragilíssimo: uma pergunta
+// que precisasse de dados actuais mas não usasse uma das palavras exactas
+// nunca disparava pesquisa nenhuma. Substituído por uma chamada LLM (classe
+// "trabalhador", grátis) que decide E reescreve a query ao mesmo tempo —
+// mesmo padrão que memoryExtraction.ts já usa: pede-se JSON estrito, e
+// trata-se qualquer coisa que não faça parse como resultado negativo.
+const CLASSIFIER_PROMPT = (context: string) => `Achas que esta mensagem precisa de informação actual da internet para responder bem \
+(preços, cotações, notícias, resultados desportivos, tempo, factos que mudam com o tempo, ou qualquer coisa que \
+tu não possas saber com certeza)? Ignora pedidos que não têm assunto nenhum (ex: só "sim, faz isso") — nesse \
+caso olha para o resto da mensagem para encontrar o assunto real.
 
-// Pedido explícito de pesquisa — independente do tópico. Sem isto, uma mensagem
-// como "faz a tua pesquisa" ou "podes investigar isso?" não disparava pesquisa
-// nenhuma, e o modelo prometia "vou pesquisar" sem nunca ter tido como. Fica à
-// parte das palavras de tópico porque, sozinha, uma frase deste tipo ("sim, faz
-// a pesquisa") não tem assunto nenhum — só serve para detectar a necessidade,
-// não para construir a query (ver extractQuery).
-const GENERIC_REQUEST_KEYWORDS = [
-  'pesquisa', 'pesquisar', 'pesquisares', 'investiga', 'investigar',
-  'procura', 'procurar', 'procurares', 'estudo', 'estudar',
-  'search', 'google', 'consulta a web', 'vai à net', 'vai à internet',
-]
+Mensagem:
+${context}
 
-// Palavras-chave de tópico que indicam necessidade de informação actual.
-const TOPIC_KEYWORDS = [
-  'preço', 'preco', 'price', 'valor', 'cotação', 'cotacao', 'quanto custa',
-  'how much', 'custo', 'custa', 'mercado', 'market',
-  'bitcoin', 'btc', 'ethereum', 'eth', 'crypto', 'cripto',
-  'acção', 'acao', 'stock', 'bolsa', 'nasdaq', 's&p',
-  'euro', 'dólar', 'dollar', 'usd', 'eur',
-  'notícia', 'noticia', 'news', 'última hora', 'hoje', 'today', 'agora', 'now',
-  'actual', 'atual', 'current', 'recente', 'recent', 'último', 'ultimo',
-  'latest', 'live', 'em directo', 'em direto',
-  'tempo', 'weather', 'clima', 'temperatura', 'chuva', 'rain',
-  'resultado', 'result', 'jogo', 'game', 'placar', 'score',
-  'liga', 'league', 'championship', 'campeonato', 'equipa', 'equipe',
-  'clube', 'classificação', 'classificacao', 'classificado',
-  'esta semana', 'this week', 'este mês', 'this month',
-  'ontem', 'yesterday', 'amanhã', 'tomorrow',
-]
+Responde APENAS com um objecto JSON, sem markdown, sem explicação:
+{"search": true ou false, "query": "pesquisa curta e directa no mesmo idioma da mensagem, sem palavras de \
+preenchimento — string vazia se search for false"}
 
-const REALTIME_KEYWORDS = [...GENERIC_REQUEST_KEYWORDS, ...TOPIC_KEYWORDS]
+JSON:`
 
-// Palavras de enchimento sem valor nenhum para um motor de pesquisa — uma frase
-// conversacional inteira ("é isso que quero, que faças um estudo...") manda o
-// SearXNG atrás da palavra errada. Sem stopwords a mesma frase reduzida a
-// "classificado equipas Benfica Porto Sporting vencer campeonato 2026/2027" já
-// traz resultados certos.
-const STOPWORDS = new Set([
-  'a', 'o', 'as', 'os', 'um', 'uma', 'uns', 'umas', 'de', 'do', 'da', 'dos', 'das',
-  'e', 'ou', 'que', 'quero', 'queria', 'isso', 'aquilo', 'com', 'sem', 'para', 'por',
-  'se', 'é', 'és', 'foi', 'ser', 'estar', 'está', 'estás', 'estão', 'tens', 'tem',
-  'podes', 'pode', 'posso', 'consegues', 'consigo', 'faz', 'faça', 'faças', 'fazer',
-  'como', 'cada', 'qual', 'quais', 'porque', 'porquê', 'não', 'sim', 'só', 'mais',
-  'muito', 'bem', 'obrigado', 'obrigada', 'foca-te', 'foca', 'nos', 'no', 'na',
-  'grandes', 'base', 'teus', 'tua', 'teu', 'tuas', 'pontos', 'ponto', 'sua',
-  'this', 'that', 'the', 'an', 'and', 'or', 'for', 'with', 'to', 'of', 'in',
-  'on', 'is', 'are', 'please', 'can', 'you', 'your',
-  ...GENERIC_REQUEST_KEYWORDS, // "estudo", "pesquisa", etc. são o pedido, não o assunto
-])
+const CLASSIFY_TIMEOUT = 12000
+const CLASSIFY_MAX_TOKENS = 120
 
-export function needsWebSearch(text: string): boolean {
-  const t = text.toLowerCase()
-  return REALTIME_KEYWORDS.some(kw => t.includes(kw))
-}
+const THINK_BLOCK_RE = /<think>[\s\S]*?(<\/think>|$)/i
+const JSON_FENCE_RE = /^```(?:json)?\s*|\s*```$/gi
+const JSON_OBJECT_RE = /\{[\s\S]*\}/
 
-// Remove pontuação e stopwords, mantendo a ordem — dá uma query estilo motor
-// de busca em vez de uma frase inteira em português corrente.
-function stripFiller(sentence: string): string {
-  const words = sentence.match(/[\wÀ-ÿ][\wÀ-ÿ/.'-]*/g) || []
-  const kept = words.filter(w => !STOPWORDS.has(w.toLowerCase()))
-  return kept.length ? kept.join(' ') : sentence
-}
-
-// Usar a mensagem inteira como query dilui o resultado quando o utilizador
-// escreve de forma conversacional. A pergunta real costuma ser a última frase
-// com assunto concreto — é essa que procuramos. Damos prioridade às frases com
-// palavra de TÓPICO (preço, bitcoin, jogo, campeonato...) porque essas é que
-// dizem do que se trata; uma frase que só tem o pedido genérico ("faz a
-// pesquisa") não tem assunto — se for a única coisa encontrada, usa-se o texto
-// todo em vez de só essa frase vazia de conteúdo.
-function extractQuery(text: string): string {
-  const sentences = text.trim().split(/(?<=[.!?\n])\s+/)
-  for (let i = sentences.length - 1; i >= 0; i--) {
-    if (TOPIC_KEYWORDS.some(kw => sentences[i].toLowerCase().includes(kw))) {
-      return stripFiller(sentences[i].trim()).slice(0, 200)
-    }
+// Falha fechada: qualquer coisa que não faça parse como JSON válido é tratada
+// como "não pesquisar" — mesmo princípio de memoryExtraction.ts (JSON
+// estrito, sem tentar aproveitar lixo linha a linha).
+export function parseClassification(raw: string): { shouldSearch: boolean; query: string } {
+  const cleaned = raw.replace(THINK_BLOCK_RE, '').trim().replace(JSON_FENCE_RE, '').trim()
+  const match = cleaned.match(JSON_OBJECT_RE)
+  if (!match) return { shouldSearch: false, query: '' }
+  let parsed: any
+  try {
+    parsed = JSON.parse(match[0])
+  } catch {
+    return { shouldSearch: false, query: '' }
   }
-  return stripFiller(text.trim()).slice(0, 200)
+  if (!parsed || typeof parsed !== 'object') return { shouldSearch: false, query: '' }
+  const query = typeof parsed.query === 'string' ? parsed.query.trim().slice(0, 200) : ''
+  return { shouldSearch: Boolean(parsed.search) && Boolean(query), query }
+}
+
+// Corre sempre na classe "trabalhador" (grátis) — nunca gasta a classe
+// "cerebro" (paga) do utilizador para uma decisão automática, e nunca manda
+// uma conversa "local" (privada) para um modelo na nuvem: mesmo princípio já
+// usado em fallbackChain.ts para delegar sub-tarefas (delegar_tarefa).
+async function classifySearch(
+  context: string,
+  callerModelClass?: string,
+): Promise<{ shouldSearch: boolean; query: string }> {
+  const { routeWithFallback } = await import('./fallbackChain.js')
+  const targetClass = callerModelClass === 'local' ? 'local' : 'trabalhador'
+  const messages: ChatMessage[] = [{ role: 'user', content: CLASSIFIER_PROMPT(context) }]
+
+  try {
+    const result = await Promise.race([
+      routeWithFallback(messages, targetClass, undefined, 'fastest', CLASSIFY_MAX_TOKENS, undefined),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error(`web search classifier: timeout after ${CLASSIFY_TIMEOUT / 1000}s`)), CLASSIFY_TIMEOUT),
+      ),
+    ]) as ChatResult
+    return parseClassification(result.content || '')
+  } catch (e) {
+    console.warn('[webSearch] classifier failed:', e)
+    return { shouldSearch: false, query: '' }
+  }
 }
 
 interface SearxngResult {
   title?: string
   content?: string
   url?: string
+}
+
+// O SearXNG já ordena por relevância léxica, mas isso não apanha sinónimos
+// nem distingue "artigos sobre o mesmo assunto" de "o mesmo artigo espelhado
+// em 3 sites" — os dois problemas que o modo speed/balanced do Vane resolve
+// com embeddings antes de escrever a resposta. Usamos o nomic-embed-text
+// local (Ollama, mesmo modelo já usado noutros projectos DAAZ) em vez de uma
+// API paga — a app já corre no computador do próprio utilizador, sem GPU
+// partilhada com outros serviços a competir. Falha ABERTA de propósito: ao
+// contrário do classificador (onde "não pesquisar" é o resultado seguro),
+// aqui o resultado seguro é devolver os resultados como vieram do SearXNG —
+// reranking pior nunca deve significar zero resultados.
+const OLLAMA_URL = 'http://localhost:11434'
+const EMBED_MODEL = 'nomic-embed-text'
+// Testado ao vivo 14 Ago 2026 (backend): com o modelo já carregado, uma
+// chamada com ~15 textos demora ~2s; a carga a frio pode levar bem mais numa
+// GPU apertada. 15s dá margem sem segurar a resposta do chat por demasiado
+// tempo se o Ollama estiver mesmo preso.
+const EMBED_TIMEOUT = 15000
+const RERANK_POOL = 15
+const SIMILARITY_THRESHOLD = 0.5
+const DEDUP_THRESHOLD = 0.85
+
+async function embed(texts: string[]): Promise<number[][] | null> {
+  if (!texts.length) return []
+  try {
+    const resp = await fetch(`${OLLAMA_URL}/api/embed`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: EMBED_MODEL, input: texts }),
+      signal: AbortSignal.timeout(EMBED_TIMEOUT),
+    })
+    if (!resp.ok) return null
+    const data = await resp.json()
+    const embeddings: number[][] | undefined = data.embeddings
+    if (!embeddings || embeddings.length !== texts.length) return null
+    return embeddings
+  } catch (e) {
+    console.warn('[webSearch] embeddings failed:', e)
+    return null
+  }
+}
+
+function cosine(a: number[], b: number[]): number {
+  let dot = 0, normA = 0, normB = 0
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i]
+    normA += a[i] * a[i]
+    normB += b[i] * b[i]
+  }
+  if (!normA || !normB) return 0
+  return dot / (Math.sqrt(normA) * Math.sqrt(normB))
+}
+
+// Ordena por semelhança semântica real à query e descarta duplicados
+// quase-idênticos. O nomic-embed-text precisa dos prefixos
+// "search_query:"/"search_document:" para separar bem os scores.
+async function rerank(query: string, results: SearxngResult[]): Promise<SearxngResult[]> {
+  if (!results.length) return results
+
+  const texts = results.map(r => `${r.title || ''} ${r.content || ''}`.trim())
+  const embeddings = await embed([`search_query: ${query}`, ...texts.map(t => `search_document: ${t}`)])
+  if (!embeddings) return results
+
+  const [queryVec, ...resultVecs] = embeddings
+  const scored = results
+    .map((r, i) => ({ r, vec: resultVecs[i], score: cosine(queryVec, resultVecs[i]) }))
+    .sort((a, b) => b.score - a.score)
+
+  const kept: { r: SearxngResult; vec: number[] }[] = []
+  for (const { r, vec, score } of scored) {
+    if (score < SIMILARITY_THRESHOLD) continue
+    if (kept.some(k => cosine(vec, k.vec) >= DEDUP_THRESHOLD)) continue
+    kept.push({ r, vec })
+  }
+
+  // O filtro de relevância chumbou tudo — mais provável ser um score mal
+  // calibrado para esta query do que os resultados serem mesmo todos
+  // irrelevantes. Preferimos mostrar algo (ordem original) a nada.
+  return kept.length ? kept.map(k => k.r) : results
 }
 
 export async function webSearch(query: string, maxResults = 5): Promise<string> {
@@ -102,8 +175,10 @@ export async function webSearch(query: string, maxResults = 5): Promise<string> 
     const resp = await fetch(url, { signal: AbortSignal.timeout(8000) })
     if (!resp.ok) return ''
     const data = await resp.json()
-    const results: SearxngResult[] = data.results || []
+    let results: SearxngResult[] = data.results || []
     if (!results.length) return ''
+
+    results = await rerank(query, results.slice(0, RERANK_POOL))
 
     const now = new Date().toLocaleString('pt-PT')
     const lines = [`[Pesquisa web — ${now}]`]
@@ -127,10 +202,13 @@ export async function webSearch(query: string, maxResults = 5): Promise<string> 
 // look like it needs current info (or the search came back empty).
 // `context` should be the last 1-2 user messages (newest last) — a short reply
 // like "sim, faz a pesquisa" has no topic of its own, that was in the message
-// before it.
-export async function maybeEnrichWithWeb(context: string): Promise<string> {
-  if (!context || !needsWebSearch(context)) return ''
-  const query = extractQuery(context)
+// before it. `callerModelClass` is only used to decide whether the classifier
+// call itself is allowed to leave the machine (see classifySearch above).
+export async function maybeEnrichWithWeb(context: string, callerModelClass?: string): Promise<string> {
+  if (!context) return ''
+  const { shouldSearch, query } = await classifySearch(context, callerModelClass)
+  if (!shouldSearch) return ''
+
   const results = await webSearch(query)
   if (!results) return ''
   return (

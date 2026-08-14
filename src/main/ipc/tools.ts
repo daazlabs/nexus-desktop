@@ -46,13 +46,13 @@ function withModeSystemPrompt(messages: ChatMessage[], toolsEnabled: boolean, la
 // Read-only, so — unlike bash/write_file — it runs in PLAN mode too, not just
 // BUILD: a question needing current info deserves a real answer whether or
 // not file/shell tools are enabled for this message.
-async function withWebSearchEnrichment(messages: ChatMessage[]): Promise<ChatMessage[]> {
+async function withWebSearchEnrichment(messages: ChatMessage[], modelClass?: string): Promise<ChatMessage[]> {
   // Last 2 user messages, not just the last — a short reply like "sim, faz a
   // pesquisa" has no topic of its own, that was in the message before it.
   const lastUserMsgs = [...messages].reverse().filter(m => m.role === 'user').slice(0, 2)
   const context = lastUserMsgs.reverse().map(m => m.content || '').filter(Boolean).join('\n')
   if (!context) return messages
-  const enrichment = await maybeEnrichWithWeb(context)
+  const enrichment = await maybeEnrichWithWeb(context, modelClass)
   if (!enrichment) return messages
   return [...messages, { role: 'system', content: enrichment }]
 }
@@ -476,7 +476,7 @@ export function registerIpcHandlers(): void {
     // conversation) instead of one clobbering another.
     const requestPermission = (action: string, detail: string) =>
       checkOrRequestPermission(action, detail, 60000, { convId: options?.convId })
-    const enrichedMessages = await withWebSearchEnrichment(messages)
+    const enrichedMessages = await withWebSearchEnrichment(messages, options?.modelClass)
     return routeWithFallback(
       withModeSystemPrompt(enrichedMessages, toolsEnabled, options?.lang),
       options.modelClass,
@@ -515,7 +515,7 @@ export function registerIpcHandlers(): void {
     const requestPermission = (action: string, detail: string) =>
       checkOrRequestPermission(action, detail, 60000, { convId: options?.convId })
     try {
-      const enrichedMessages = await withWebSearchEnrichment(messages)
+      const enrichedMessages = await withWebSearchEnrichment(messages, options?.modelClass)
       const gen = routeWithFallbackStream(
         withModeSystemPrompt(enrichedMessages, toolsEnabled, options?.lang),
         options.modelClass,
