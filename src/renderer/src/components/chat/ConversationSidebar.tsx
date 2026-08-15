@@ -91,9 +91,13 @@ export default function ConversationSidebar({
     <>
       {/* Projects section */}
       <div className="border-b border-border/60">
-        <button
+        {/* A <div> here, not a <button> — the "+" below is a real button
+            nested inside it, and a button can't contain another button
+            (invalid HTML, triggers a React hydration warning). Same
+            div-row + button-actions pattern as the per-project rows below. */}
+        <div
           onClick={() => setProjectsOpen(p => !p)}
-          className="w-full flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-muted-foreground hover:text-foreground transition-colors">
+          className="w-full flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-muted-foreground hover:text-foreground transition-colors cursor-pointer">
           {projectsOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
           <span className="uppercase tracking-wide">{lang === "pt" ? "Projectos" : "Projects"}</span>
           <button
@@ -102,7 +106,7 @@ export default function ConversationSidebar({
             title={lang === "pt" ? "Novo projecto" : "New project"}>
             <Plus size={12} />
           </button>
-        </button>
+        </div>
 
         {projectsOpen && (
           <div className="px-2 pb-2 space-y-0.5">

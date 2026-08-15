@@ -27,6 +27,14 @@ extraResources:
   # same for every install.
   - from: skills
     to: skills
+  # Pre-built browser extension (see ../browser-extension/) — plain static
+  # JS/HTML/manifest, no node_modules involved (esbuild already bundled it),
+  # so a single from/to pair is enough, unlike the mcp-servers block below.
+  # Only revealed to the user via "Mostrar pasta" in Settings
+  # (browserExtensionRuntime.showExtensionInFolder) — never spawned or run
+  # by the app itself, it gets installed by hand into the user's own browser.
+  - from: ../browser-extension/dist
+    to: browser-extension/dist
   # OAuth "installed app" clients, one JSON per provider, written by CI from
   # repo secrets (see release.yml) — never committed. Without these the
   # Google/Canva connectors ship with no way to log in. Absent on a plain

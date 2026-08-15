@@ -432,6 +432,21 @@ export const api = {
     return nexusApi.connectors?.sketchupInstall?.(onProgress, onDone) ?? (() => {})
   },
 
+  getBrowserExtStatus: async (): Promise<{ listening: boolean; port: number; paired: boolean; browserLabel?: string }> => {
+    return (
+      (await nexusApi.connectors?.browserExtStatus?.()) || { listening: false, port: 0, paired: false }
+    )
+  },
+  getBrowserExtPairingCode: async (): Promise<string> => {
+    return (await nexusApi.connectors?.browserExtPairingCode?.()) || ""
+  },
+  regenerateBrowserExtCode: async (): Promise<string> => {
+    return (await nexusApi.connectors?.browserExtRegenerate?.()) || ""
+  },
+  showBrowserExtFolder: async () => {
+    return await nexusApi.connectors?.browserExtShowFolder?.()
+  },
+
   getPhotoshopStatus: async (): Promise<{
     supported: boolean
     provisioned: boolean

@@ -7,6 +7,7 @@ import { initAutoUpdater } from './updater.js'
 import { initRemoteCatalog } from './services/remoteCatalog.js'
 import { startHealthChecker } from './services/healthChecker.js'
 import { closeAllConnections } from './services/mcpConnectors.js'
+import { ensureBridgeServer, stopBridgeServer } from './services/browserExtensionRuntime.js'
 
 // A macOS app launched from the Finder/Dock doesn't inherit the shell's PATH
 // (~/.zshrc etc.) — without this, MCP servers configured with a bare
@@ -148,6 +149,7 @@ app.whenReady().then(() => {
   registerIpcHandlers()
   initRemoteCatalog() // non-blocking: bundled catalog serves until remote/cache applies
   startHealthChecker() // periodic provider reachability check, feeds isProviderDisabled() in fallbackChain
+  ensureBridgeServer() // browser-extension WebSocket bridge — always listening, waits for pairing
   createWindow()
   initAutoUpdater(isDev)
 
@@ -171,6 +173,7 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   closeAllConnections().catch((err) => console.error('[mcp] error closing connections on quit:', err))
+  stopBridgeServer()
 })
 
 } // gotLock

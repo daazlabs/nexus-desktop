@@ -1,9 +1,9 @@
-import { useState, useCallback, useRef, useLayoutEffect, memo } from "react"
+import { useState, useCallback, useRef, useEffect, useLayoutEffect, memo } from "react"
 import type { Message, ToolEvent } from "../../types"
 import type { Lang } from "../../i18n"
 import { t } from "../../i18n"
 import Markdown from "../ui/markdown"
-import { Pencil } from "lucide-react"
+import { Pencil, Scale } from "lucide-react"
 
 interface Props {
   lang: Lang
@@ -15,6 +15,12 @@ interface Props {
   showToolEvents: boolean
   onEdit?: (msgId: number, newContent: string) => void
   onRegenerate?: (msgId: number) => void
+  // Cross-model evaluation ("Avaliar com…"): paid/API ("cerebro") models the
+  // user can hand this answer to for a critique. Restricted to that class —
+  // unlike Regenerate/edit, this fires an extra paid request the user didn't
+  // type themselves, so it's opt-in to models they're already paying for.
+  cerebroModels?: string[]
+  onEvaluate?: (msgId: number, modelId: string) => void
 }
 
 // Friendly copy for mcp__browser__* tool events — everything else keeps the
@@ -129,7 +135,7 @@ function ThinkBlock({ content, done, lang }: { content: string; done: boolean; l
   )
 }
 
-function MessageBubble({ lang, msg, streamingContent, toolEvents, isStreaming, showToolEvents, onEdit, onRegenerate }: Props) {
+function MessageBubble({ lang, msg, streamingContent, toolEvents, isStreaming, showToolEvents, onEdit, onRegenerate, cerebroModels, onEvaluate }: Props) {
   const isUser = msg.role === "user"
   const isSystem = msg.role === "system"
   const isAssistant = msg.role === "assistant"
@@ -137,6 +143,21 @@ function MessageBubble({ lang, msg, streamingContent, toolEvents, isStreaming, s
   const [editing, setEditing] = useState(false)
   const [editValue, setEditValue] = useState(msg.content)
   const editTextareaRef = useRef<HTMLTextAreaElement>(null)
+  const [evalOpen, setEvalOpen] = useState(false)
+  const evalRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!evalOpen) return
+    const handler = (e: MouseEvent) => {
+      if (evalRef.current && !evalRef.current.contains(e.target as Node)) setEvalOpen(false)
+    }
+    document.addEventListener("mousedown", handler)
+    return () => document.removeEventListener("mousedown", handler)
+  }, [evalOpen])
+
+  // Models this message's own answer can be handed to — never itself, so
+  // "avaliar com Claude" never appears under a Claude answer.
+  const evalTargets = (cerebroModels ?? []).filter(m => m !== msg.model)
 
   // rows={editValue.split("\n").length} used to size this by explicit
   // newlines only — a long message with no manual line breaks (the normal
@@ -269,12 +290,17 @@ function MessageBubble({ lang, msg, streamingContent, toolEvents, isStreaming, s
             </div>
           </div>
         ) : (
-          // Links render with text-primary (purple) — invisible on a user
-          // bubble, whose own background IS bg-primary (purple on purple).
-          // Force them to the bubble's own foreground color there instead;
-          // assistant/system bubbles have a light/tinted background where
-          // text-primary already reads fine, so leave those alone.
-          <Markdown content={msg.content} className={isUser ? "[&_a]:!text-primary-foreground" : undefined} />
+          <>
+            {isUser && msg.isEvalPrompt && (
+              <p className="text-xs opacity-70 mb-1">{t(lang, "evalRequestTag")}</p>
+            )}
+            {/* Links render with text-primary (purple) — invisible on a user
+                bubble, whose own background IS bg-primary (purple on purple).
+                Force them to the bubble's own foreground color there instead;
+                assistant/system bubbles have a light/tinted background where
+                text-primary already reads fine, so leave those alone. */}
+            <Markdown content={msg.content} className={isUser ? "[&_a]:!text-primary-foreground" : undefined} />
+          </>
         )}
 
         {!isStreaming && !editing && (
@@ -296,7 +322,9 @@ function MessageBubble({ lang, msg, streamingContent, toolEvents, isStreaming, s
                   <Pencil size={13} />
                 </button>
               )}
-              <div className="flex items-center gap-1 opacity-0 group-hover/bubble:opacity-100 transition-opacity">
+              <div className={`flex items-center gap-1 transition-opacity ${
+                evalOpen ? "opacity-100" : "opacity-0 group-hover/bubble:opacity-100"
+              }`}>
                 {isAssistant && onRegenerate && msg.id > 0 && (
                   <button onClick={() => onRegenerate(msg.id)}
                     className="text-[11px] text-muted-foreground/50 hover:text-muted-foreground px-1.5 py-0.5 rounded hover:bg-accent transition-colors"
@@ -309,6 +337,31 @@ function MessageBubble({ lang, msg, streamingContent, toolEvents, isStreaming, s
                     className="text-[11px] text-muted-foreground/50 hover:text-muted-foreground px-1.5 py-0.5 rounded hover:bg-accent transition-colors">
                     {copied ? t(lang, "copied") : t(lang, "copy")}
                   </button>
+                )}
+                {isAssistant && onEvaluate && msg.id > 0 && evalTargets.length > 0 && (
+                  <div ref={evalRef} className="relative">
+                    <button onClick={() => setEvalOpen(o => !o)}
+                      className="flex items-center gap-1 text-[11px] text-muted-foreground/50 hover:text-muted-foreground px-1.5 py-0.5 rounded hover:bg-accent transition-colors"
+                      title={t(lang, "evaluateWith")}>
+                      <Scale size={12} />
+                    </button>
+                    {evalOpen && (
+                      <div className="absolute bottom-full right-0 mb-1 z-50 bg-card border border-border rounded-xl shadow-xl w-48 overflow-hidden">
+                        <div className="px-3 py-1.5 text-[10px] font-semibold text-muted-foreground/70 uppercase tracking-wider border-b border-border/30">
+                          {t(lang, "evaluateWith")}
+                        </div>
+                        <div className="max-h-56 overflow-y-auto">
+                          {evalTargets.map(m => (
+                            <button key={m}
+                              onClick={() => { onEvaluate(msg.id, m); setEvalOpen(false) }}
+                              className="w-full text-left px-3 py-2 text-xs text-foreground hover:bg-accent transition-colors truncate">
+                              {m}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 )}
               </div>
             </div>
@@ -328,6 +381,7 @@ function messageBubblePropsEqual(prev: Readonly<Props>, next: Readonly<Props>): 
   if (next.isStreaming) return false
   return prev.msg === next.msg && prev.lang === next.lang && prev.showToolEvents === next.showToolEvents
     && prev.onEdit === next.onEdit && prev.onRegenerate === next.onRegenerate
+    && prev.onEvaluate === next.onEvaluate && prev.cerebroModels === next.cerebroModels
 }
 
 export default memo(MessageBubble, messageBubblePropsEqual)

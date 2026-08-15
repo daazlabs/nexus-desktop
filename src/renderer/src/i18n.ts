@@ -26,6 +26,9 @@ const translations = {
   copy:                   { pt: "copiar",                   en: "copy" },
   copied:                 { pt: "✓ copiado",                en: "✓ copied" },
 
+  evaluateWith:           { pt: "Avaliar com…",             en: "Evaluate with…" },
+  evalRequestTag:         { pt: "🧪 Pedido de avaliação",   en: "🧪 Evaluation request" },
+
   howCanIHelp:            { pt: "Como posso ajudar?",       en: "How can I help?" },
   selectModelsToCompare:  { pt: "Seleciona até 3 modelos acima para comparar respostas", en: "Select up to 3 models above to compare responses" },
   prompt1Label:           { pt: "Resume este texto",        en: "Summarise this text" },

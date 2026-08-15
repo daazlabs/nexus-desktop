@@ -36,6 +36,15 @@ const api = {
     },
   },
   connectors: {
+    // Browser extension bridge — no install step, just status + pairing
+    // code (see browserExtensionRuntime.ts). Polled from Settings the same
+    // way sketchup/photoshop status is, but with plain invoke() instead of
+    // the progress-event boilerplate below: there's no multi-step install to
+    // report progress on.
+    browserExtStatus: () => ipcRenderer.invoke('nexus:connectors:browserExt:status'),
+    browserExtPairingCode: (): Promise<string> => ipcRenderer.invoke('nexus:connectors:browserExt:pairingCode'),
+    browserExtRegenerate: (): Promise<string> => ipcRenderer.invoke('nexus:connectors:browserExt:regenerate'),
+    browserExtShowFolder: () => ipcRenderer.invoke('nexus:connectors:browserExt:showFolder'),
     list: () => ipcRenderer.invoke('nexus:connectors:list'),
     setToken: (connectorId: string, token: string) =>
       ipcRenderer.invoke('nexus:connectors:setToken', connectorId, token),

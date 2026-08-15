@@ -10,6 +10,7 @@ import { buildEnv } from '../mcp/resolveCommand.js'
 import * as autocadRuntime from './autocadRuntime.js'
 import * as sketchupRuntime from './sketchupRuntime.js'
 import * as adobeRuntime from './adobeRuntime.js'
+import * as browserExtensionRuntime from './browserExtensionRuntime.js'
 import { PHOTOSHOP, PREMIERE, INDESIGN, type AdobeAppConfig } from './adobeRuntime.js'
 import type { McpConnection } from './mcpClient.js'
 
@@ -1029,7 +1030,11 @@ export async function listOpenAiToolsForConnectors(): Promise<any[]> {
   // Always attempted (no isProvisioned() guard, unlike AutoCAD) — see
   // getBrowserConnection() comment. A failed connect just returns null and
   // the tools silently don't show up, same fallback as every other connector.
-  {
+  // Skipped entirely when the browser-extension bridge is paired: that's the
+  // by-default path now (drives the user's real browser — see
+  // BROWSER-EXTENSION.md), and showing both tool families at once would just
+  // give the model two ways to do the same thing.
+  if (!browserExtensionRuntime.isPaired()) {
     const conn = await getBrowserConnection()
     if (conn) {
       try {

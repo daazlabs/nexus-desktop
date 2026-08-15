@@ -170,6 +170,7 @@ const CONNECTOR_CHIPS: Record<string, { label: string; bg: string }> = {
   photoshop: { label: "Ps", bg: "#31A8FF" },
   premiere: { label: "Pr", bg: "linear-gradient(135deg,#00005B,#9999FF)" },
   indesign: { label: "Id", bg: "#FF3366" },
+  browserext: { label: "Br", bg: "linear-gradient(135deg,#f59e0b,#ef4444)" },
 }
 function connectorChip(id: string, name: string): { label: string; bg: string } {
   return CONNECTOR_CHIPS[id] || { label: name.slice(0, 2).toUpperCase(), bg: "#6b7280" }
@@ -423,6 +424,83 @@ function AdobeAppCard({ lang, name, status, installing, progress, error, disconn
   )
 }
 
+// Not a token/OAuth connector (ConnectorCard) or a plugin-install flow
+// (AdobeAppCard) — there's nothing to install, the WebSocket bridge is
+// already listening (see browserExtensionRuntime.ts). This card's whole job
+// is showing the pairing code to paste into the extension's popup, and
+// reflecting whether that pairing succeeded.
+function BrowserExtCard({ lang, status, pairingCode, onRegenerate, onShowFolder }: {
+  lang: Lang
+  status: { listening: boolean; paired: boolean; browserLabel?: string } | null
+  pairingCode: string
+  onRegenerate: () => void
+  onShowFolder: () => void
+}) {
+  const [copied, setCopied] = useState(false)
+  const connected = !!status?.paired
+  const copyCode = () => {
+    navigator.clipboard?.writeText(pairingCode).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    })
+  }
+  return (
+    <div className={`bg-card border rounded-xl p-4 flex flex-col gap-3 transition-colors sm:col-span-2 ${connected ? "border-green-700/40 border-l-4 border-l-green-500" : "border-border"}`}>
+      <div className="flex items-start gap-3">
+        <ChipIcon id="browserext" name="Browser" />
+        <div className="min-w-0 flex-1">
+          <span className="font-medium text-sm text-foreground block truncate">
+            {lang === "pt" ? "Browser (extensão)" : "Browser (extension)"} <span className="text-[10px] font-bold uppercase tracking-wide text-muted-foreground bg-muted rounded px-1.5 py-0.5 align-middle">{lang === "pt" ? "Local" : "Local"}</span>
+          </span>
+          <span className="block truncate text-xs text-muted-foreground">
+            {connected
+              ? (lang === "pt" ? `Ligado — ${status?.browserLabel}` : `Connected — ${status?.browserLabel}`)
+              : (lang === "pt" ? "A aguardar ligação da extensão..." : "Waiting for the extension to connect...")}
+          </span>
+        </div>
+        <StatusPill lang={lang} connected={connected} />
+      </div>
+
+      {connected ? (
+        <div className="space-y-2">
+          <p className="text-xs text-muted-foreground leading-relaxed">
+            {lang === "pt"
+              ? "O agente pode navegar, ler e interagir com este browser em modo BUILD — sessões e logins já feitos aparecem tal como estão."
+              : "The agent can navigate, read and interact with this browser in BUILD mode — existing sessions and logins show up as-is."}
+          </p>
+          <button onClick={onRegenerate} className="text-xs text-muted-foreground hover:text-destructive transition-colors self-start">
+            {lang === "pt" ? "Desemparelhar (gera novo código)" : "Unpair (generates a new code)"}
+          </button>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          <p className="text-xs text-muted-foreground leading-relaxed">
+            {lang === "pt"
+              ? 'Instala a extensão "DaazNexus Browser Bridge" no Chrome, Brave ou Edge — página de extensões do browser, ativa o modo de programador, "Carregar expandida" (não precisa de nenhuma loja) — e cola o código abaixo no popup da extensão.'
+              : 'Install the "DaazNexus Browser Bridge" extension in Chrome, Brave or Edge — browser\'s extensions page, enable developer mode, "Load unpacked" (no store needed) — then paste the code below into the extension\'s popup.'}
+          </p>
+          <div className="flex items-center gap-2">
+            <code className="flex-1 rounded-lg px-3 py-2 border border-border bg-input/30 text-foreground text-xs font-mono truncate">
+              {pairingCode || "…"}
+            </code>
+            <button onClick={copyCode} className="bg-primary text-primary-foreground rounded-full px-3 py-2 font-medium text-xs hover:opacity-90 transition-opacity whitespace-nowrap">
+              {copied ? (lang === "pt" ? "Copiado!" : "Copied!") : (lang === "pt" ? "Copiar" : "Copy")}
+            </button>
+          </div>
+          <div className="flex items-center gap-3">
+            <button onClick={onShowFolder} className="text-xs text-muted-foreground underline hover:text-foreground transition-colors">
+              {lang === "pt" ? "Mostrar pasta da extensão" : "Show extension folder"}
+            </button>
+            <button onClick={onRegenerate} className="text-xs text-muted-foreground underline hover:text-foreground transition-colors">
+              {lang === "pt" ? "Novo código" : "New code"}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function ConnectorsSummary({ lang, connected, total }: { lang: Lang; connected: number; total: number }) {
   const pct = total ? Math.round((connected / total) * 100) : 0
   return (
@@ -492,6 +570,9 @@ export default function SettingsPage({ lang, themeColor, setThemeColor, onNaviga
   const [autocadProgress, setAutocadProgress] = useState<{ step: string; pct: number } | null>(null)
   const [autocadError, setAutocadError] = useState<string | null>(null)
 
+  const [browserExtStatus, setBrowserExtStatus] = useState<{ listening: boolean; port: number; paired: boolean; browserLabel?: string } | null>(null)
+  const [browserExtCode, setBrowserExtCode] = useState("")
+
   const [sketchupStatus, setSketchupStatus] = useState<{ supported: boolean; provisioned: boolean; connected: boolean; installDir: string; sketchupListening: boolean } | null>(null)
   const [sketchupInstalling, setSketchupInstalling] = useState(false)
   const [sketchupProgress, setSketchupProgress] = useState<{ step: string; pct: number } | null>(null)
@@ -530,6 +611,9 @@ export default function SettingsPage({ lang, themeColor, setThemeColor, onNaviga
   const loadConnectors = () => api.listConnectors().then(setConnectors).catch(() => {})
   const loadMcpServers = () => api.listMcpServers().then(setMcpServers).catch(() => {})
   const loadAutocadStatus = () => api.getAutocadStatus().then(setAutocadStatus).catch(() => {})
+  const loadBrowserExtStatus = () => api.getBrowserExtStatus().then(setBrowserExtStatus).catch(() => {})
+  const loadBrowserExtCode = () => api.getBrowserExtPairingCode().then(setBrowserExtCode).catch(() => {})
+  const regenerateBrowserExtCode = () => api.regenerateBrowserExtCode().then((code) => { setBrowserExtCode(code); loadBrowserExtStatus() }).catch(() => {})
   const loadSketchupStatus = () => api.getSketchupStatus().then(setSketchupStatus).catch(() => {})
   const loadPhotoshopStatus = () => api.getPhotoshopStatus().then(setPhotoshopStatus).catch(() => {})
   const loadPremiereStatus = () => api.getPremiereStatus().then(setPremiereStatus).catch(() => {})
@@ -543,6 +627,8 @@ export default function SettingsPage({ lang, themeColor, setThemeColor, onNaviga
     loadConnectors()
     loadMcpServers()
     loadAutocadStatus()
+    loadBrowserExtStatus()
+    loadBrowserExtCode()
     loadSketchupStatus()
     loadPhotoshopStatus()
     loadPremiereStatus()
@@ -578,6 +664,18 @@ export default function SettingsPage({ lang, themeColor, setThemeColor, onNaviga
     const id = setInterval(loadIndesignStatus, 2500)
     return () => clearInterval(id)
   }, [indesignStatus])
+
+  // Unlike the other local connectors, pairing here isn't a one-time install
+  // — the extension can connect or drop at any moment, entirely from the
+  // browser side (closed, reloaded, "Esquecer" in the popup). So this polls
+  // unconditionally on the connectors tab rather than only while "waiting
+  // for one remaining manual step" like the effects above; it's a cheap
+  // in-process status read, not a network probe.
+  useEffect(() => {
+    if (tab !== "connectors") return
+    const id = setInterval(loadBrowserExtStatus, 3000)
+    return () => clearInterval(id)
+  }, [tab])
 
   // Same idea as the Photoshop/Premiere polling above: the plugin is
   // installed but only loads on SketchUp's next startup, so poll while
@@ -947,8 +1045,8 @@ export default function SettingsPage({ lang, themeColor, setThemeColor, onNaviga
         <div className="max-w-3xl mx-auto p-4 space-y-6">
           <ConnectorsSummary
             lang={lang}
-            connected={connectors.filter(c => c.status === "connected").length + [autocadStatus?.connected, sketchupStatus?.connected, photoshopStatus?.connected, premiereStatus?.connected, indesignStatus?.connected].filter(Boolean).length}
-            total={connectors.length + 3}
+            connected={connectors.filter(c => c.status === "connected").length + [autocadStatus?.connected, browserExtStatus?.paired, sketchupStatus?.connected, photoshopStatus?.connected, premiereStatus?.connected, indesignStatus?.connected].filter(Boolean).length}
+            total={connectors.length + 4}
           />
 
           <section>
@@ -1065,6 +1163,14 @@ export default function SettingsPage({ lang, themeColor, setThemeColor, onNaviga
               description={lang === "pt" ? "Automação directa de apps instaladas neste computador — sem conta, sem nuvem" : "Direct automation of apps installed on this machine — no account, no cloud"}
             />
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <BrowserExtCard
+                lang={lang}
+                status={browserExtStatus}
+                pairingCode={browserExtCode}
+                onRegenerate={regenerateBrowserExtCode}
+                onShowFolder={() => api.showBrowserExtFolder()}
+              />
+
               <div className={`bg-card border rounded-xl p-4 flex flex-col gap-3 transition-colors ${autocadStatus?.connected ? "border-green-700/40 border-l-4 border-l-green-500" : "border-border"}`}>
                 <div className="flex items-start gap-3">
                   <ChipIcon id="autocad" name="AutoCAD" />

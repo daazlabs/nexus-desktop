@@ -396,16 +396,30 @@ async function executeToolCall(
   const args = JSON.parse(tc.function.arguments || '{}')
 
   // Unconditional permission gate: no callback -> no execution. MCP tools
-  // (GitHub/Drive/Gmail) are treated as dangerous by default alongside the
-  // native gated tools — an arbitrary third-party MCP server has no known
-  // blast radius, so it never gets a pass.
-  if ((GATED_TOOLS.has(name) || name.startsWith('mcp__')) && !requestPermission) {
+  // (GitHub/Drive/Gmail) and browser_* (drives the user's real, logged-in
+  // browser) are treated as dangerous by default alongside the native gated
+  // tools — an arbitrary third-party MCP server has no known blast radius,
+  // and a browser tool can submit forms/purchases just like bash can run
+  // commands, so neither ever gets a pass.
+  if ((GATED_TOOLS.has(name) || name.startsWith('mcp__') || name.startsWith('browser_')) && !requestPermission) {
     return 'Permission denied.'
   }
 
   if (name.startsWith('mcp__')) {
     const { dispatchMcpCall } = await import('./mcpConnectors.js')
     return await dispatchMcpCall(name, args, requestPermission)
+  }
+
+  // browser_navigate/browser_snapshot/browser_click/browser_type/
+  // browser_screenshot — a first-class app tool (like bash/read_file above),
+  // not an MCP connector: the WebSocket bridge to the paired extension
+  // already runs in-process, there's no subprocess to spawn. See
+  // browserExtensionRuntime.ts.
+  if (name.startsWith('browser_')) {
+    const ok = await requestPermission!(name, `${name}(${JSON.stringify(args).slice(0, 150)})`)
+    if (!ok) return 'Permission denied.'
+    const browserExt = await import('./browserExtensionRuntime.js')
+    return await browserExt.dispatchBrowserTool(name, args)
   }
 
   if (name === 'delegar_tarefa') {

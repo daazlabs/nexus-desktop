@@ -208,6 +208,26 @@ export default function ChatPage({ active, onNavigate, colorMode, setColorMode, 
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768)
   const [availProviders, setAvailProviders] = useState<Record<string, CategorizedProvider[]> | null>(null)
+  // "Avaliar com…" is restricted to paid/API ("cerebro") models on purpose —
+  // free and local models aren't a serious second opinion, and this fires an
+  // extra request the user didn't type themselves, so keep it to models
+  // they're already paying for. Filtered by the per-model `paid` flag, not
+  // the availProviders.paid *bucket*: that bucket is provider-level (a
+  // provider only lands there if it has zero free models), so aggregators
+  // that mix free and paid models — e.g. an OpenRouter-style gateway
+  // offering both a free Llama tier and Claude/GPT — get bucketed under
+  // "free" entirely, hiding their paid models from a filter keyed on the
+  // bucket. Model type is CategorizedModel.paid per types.ts. Memoized so
+  // MessageBubble's prop-identity memo (messageBubblePropsEqual) doesn't see
+  // a new array every render.
+  const cerebroModels = useMemo(() => {
+    if (!availProviders) return []
+    const ids: string[] = []
+    for (const providers of Object.values(availProviders)) {
+      for (const p of providers) for (const m of p.models) if (m.paid && !ids.includes(m.id)) ids.push(m.id)
+    }
+    return ids
+  }, [availProviders])
   // Queue, not a single slot: several conversations can stream (and request
   // tool permission) at the same time, so each needs its own visible prompt
   // instead of the latest one silently replacing an earlier pending one.
@@ -229,7 +249,7 @@ export default function ChatPage({ active, onNavigate, colorMode, setColorMode, 
   // Lets handleEdit/handleRegenerate (defined above sendMessage, and kept
   // referentially stable for MessageBubble's memo) call the current
   // sendMessage without capturing a stale copy of it.
-  const sendMessageRef = useRef<(content?: string) => Promise<void>>(async () => {})
+  const sendMessageRef = useRef<(content?: string, overrideModel?: string, isEvalPrompt?: boolean) => Promise<void>>(async () => {})
   const convsRef = useRef<{ id: number; title: string }[]>([])
   const cleanupPermRef = useRef<(() => void) | null>(null)
   const cleanupResolvedRef = useRef<(() => void) | null>(null)
@@ -453,6 +473,22 @@ export default function ChatPage({ active, onNavigate, colorMode, setColorMode, 
     await truncateAndSend(msgId, prevUser.content)
   }, [])
 
+  // "Avaliar com…": hands an existing assistant answer to a different paid
+  // model for a critique, as a normal new turn appended to the same
+  // conversation — not a truncate/replace like Regenerate. The evaluator
+  // model sees the full thread (question + the answer being judged) because
+  // sendMessage always sends the whole history; picking the original model
+  // again afterwards lets it read the critique and respond, same mechanism.
+  const handleEvaluate = useCallback((msgId: number, modelId: string) => {
+    const msg = messagesRef.current.find(m => m.id === msgId)
+    if (!msg) return
+    const authorLabel = msg.model || (lang === "pt" ? "o modelo anterior" : "the previous model")
+    const prompt = lang === "pt"
+      ? `Avalia criticamente a resposta anterior, dada por ${authorLabel}, à pergunta do utilizador acima. Aponta imprecisões, lacunas e sugestões concretas de melhoria.`
+      : `Critically evaluate the previous answer, given by ${authorLabel}, to the user's question above. Point out inaccuracies, gaps, and concrete suggestions for improvement.`
+    sendMessageRef.current(prompt, modelId, true)
+  }, [lang])
+
   const deleteConv = useCallback(async (id: number) => {
     if (!mountedRef.current) return
     const prevConvs = convs
@@ -577,7 +613,11 @@ export default function ChatPage({ active, onNavigate, colorMode, setColorMode, 
   // onClick, so the first argument is a MouseEvent — hence the typeof check
   // rather than plain truthiness) and from an edited/regenerated message,
   // which passes the text to send directly instead of going through the box.
-  const sendMessage = async (overrideContent?: string) => {
+  // overrideModel/isEvalPrompt: used by handleEvaluate ("Avaliar com…") to
+  // fire a single turn on a specific model without touching the selectedModel
+  // the user has picked for the conversation — picking Claude again right
+  // after must not require re-selecting it first.
+  const sendMessage = async (overrideContent?: string, overrideModel?: string, isEvalPrompt?: boolean) => {
     const override = typeof overrideContent === "string" ? overrideContent.trim() : ""
     if ((!override && !input.trim() && pendingFiles.length === 0) || loading) return
     let content = override || input.trim()
@@ -600,7 +640,7 @@ export default function ChatPage({ active, onNavigate, colorMode, setColorMode, 
 
     const ts = Date.now()
     const placeholderId = -ts
-    const userMsg: Message = { id: ts, role: "user", content }
+    const userMsg: Message = { id: ts, role: "user", content, ...(isEvalPrompt ? { isEvalPrompt: true } : {}) }
     const currentMessages = messagesRef.current
     setMessages([...currentMessages, userMsg, { id: placeholderId, role: "assistant", content: "" }])
 
@@ -701,11 +741,12 @@ export default function ChatPage({ active, onNavigate, colorMode, setColorMode, 
     }
 
     const startStream = (actualCid: number) => {
+      const effectiveModel = overrideModel || selectedModel
       let temperature: number | undefined
-      if (selectedModel && availProviders) {
+      if (effectiveModel && availProviders) {
         for (const providers of Object.values(availProviders)) {
           for (const p of providers) {
-            if (p.models.some(m => m.id === selectedModel)) {
+            if (p.models.some(m => m.id === effectiveModel)) {
               try { temperature = JSON.parse(localStorage.getItem(`nexus-agent-pref-${p.id}`) || "{}").temperature } catch { /* */ }
               break
             }
@@ -728,7 +769,15 @@ export default function ChatPage({ active, onNavigate, colorMode, setColorMode, 
       const activeProject = activeProjectId ? projects.find(p => p.id === activeProjectId) : null
       const cancel = api.streamToProvider(
         ipcMessages,
-        { modelClass, model: selectedModel || undefined, strategy, temperature, workingDir: activeProject?.working_dir || undefined, toolsEnabled, lang, convId: actualCid },
+        {
+          // Evaluation always targets a specific paid model explicitly —
+          // don't let the conversation's own AUTO/trabalhador/local class
+          // selection reroute or fall back away from the model the user
+          // picked in the "Avaliar com…" dropdown.
+          modelClass: overrideModel ? "cerebro" : modelClass,
+          model: effectiveModel || undefined,
+          strategy, temperature, workingDir: activeProject?.working_dir || undefined, toolsEnabled, lang, convId: actualCid,
+        },
         (chunk) => {
           const s = activeStreamsRef.current.get(actualCid)
           if (!s) return
@@ -1063,7 +1112,8 @@ export default function ChatPage({ active, onNavigate, colorMode, setColorMode, 
                   ) : (
                     <MessageBubble lang={lang} msg={item.msg} streamingContent={streamingContent} loading={loading}
                       toolEvents={toolEvents} isStreaming={item.msg.id < 0} showToolEvents={true}
-                      onEdit={handleEdit} onRegenerate={handleRegenerate} />
+                      onEdit={handleEdit} onRegenerate={handleRegenerate}
+                      cerebroModels={cerebroModels} onEvaluate={handleEvaluate} />
                   )}
                 </div>
               ))

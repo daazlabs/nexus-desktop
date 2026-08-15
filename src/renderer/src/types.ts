@@ -33,6 +33,10 @@ export interface Message {
   multiGroupId?: string
   isLoading?: boolean
   attachments?: { url: string; name: string; type: string }[]
+  // Set on the synthetic user turn auto-sent by "Avaliar com…" (cross-model
+  // evaluation) — lets MessageBubble render it as a system-triggered request
+  // instead of something the user typed themselves.
+  isEvalPrompt?: boolean
 }
 
 export interface ChatResponse {
