@@ -72,23 +72,23 @@ export default function SkillsPage({ lang, onNavigate }: { lang: Lang; onNavigat
   }
 
   return (
-    <div className="min-h-screen bg-neutral-950">
-      <header className="bg-neutral-900 border-b border-neutral-800 px-4 py-3">
+    <div className="min-h-screen bg-background">
+      <header className="bg-card border-b border-border px-4 py-3">
         <div className="max-w-2xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-2">
             <span className="text-xl">🛠️</span>
-            <h1 className="text-white font-bold text-lg">
+            <h1 className="text-foreground font-bold text-lg">
               {lang === "pt" ? "Minhas Skills" : "My Skills"}
             </h1>
           </div>
-          <button onClick={() => onNavigate("chat")} className="text-neutral-400 hover:text-white transition-colors text-sm">
+          <button onClick={() => onNavigate("chat")} className="text-muted-foreground hover:text-foreground transition-colors text-sm">
             ← {lang === "pt" ? "Voltar ao chat" : "Back to chat"}
           </button>
         </div>
       </header>
 
       <div className="max-w-2xl mx-auto p-4 space-y-4">
-        <p className="text-neutral-400 text-sm">
+        <p className="text-muted-foreground text-sm">
           {lang === "pt"
             ? "Um skill é uma receita de instruções que ensinas ao assistente para uma tarefa que repetes muitas vezes. São só teus — privados, ninguém mais na app os vê ou usa."
             : "A skill is a recipe of instructions you teach the assistant for a task you repeat often. They're yours only — private, no one else on the app sees or uses them."}
@@ -97,40 +97,40 @@ export default function SkillsPage({ lang, onNavigate }: { lang: Lang; onNavigat
         {!showForm && (
           <button
             onClick={startCreate}
-            className="w-full bg-violet-700 hover:bg-violet-600 text-white text-sm font-medium rounded-xl px-4 py-3 transition-colors">
+            className="w-full bg-primary hover:bg-primary/90 text-primary-foreground text-sm font-medium rounded-xl px-4 py-3 transition-colors">
             + {lang === "pt" ? "Criar novo skill" : "Create new skill"}
           </button>
         )}
 
         {showForm && (
-          <div className="bg-neutral-900 border border-neutral-800 rounded-xl p-4 space-y-3">
-            <h2 className="text-white text-sm font-medium">
+          <div className="bg-card border border-border rounded-xl p-4 space-y-3">
+            <h2 className="text-foreground text-sm font-medium">
               {editingId !== null ? (lang === "pt" ? "Editar skill" : "Edit skill") : (lang === "pt" ? "Novo skill" : "New skill")}
             </h2>
             <div>
-              <label className="text-neutral-400 text-xs block mb-1">
+              <label className="text-muted-foreground text-xs block mb-1">
                 {lang === "pt" ? "Nome" : "Name"}
               </label>
               <input
                 value={name}
                 onChange={e => setName(e.target.value)}
                 placeholder={lang === "pt" ? "ex: resumir-emails-trabalho" : "e.g. summarize-work-emails"}
-                className="w-full bg-neutral-800 border border-neutral-700 rounded-lg px-3 py-2 text-sm text-white placeholder:text-neutral-600 focus:outline-none focus:border-violet-600"
+                className="w-full bg-secondary border border-border rounded-lg px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary"
               />
             </div>
             <div>
-              <label className="text-neutral-400 text-xs block mb-1">
+              <label className="text-muted-foreground text-xs block mb-1">
                 {lang === "pt" ? "Descrição curta" : "Short description"}
               </label>
               <input
                 value={description}
                 onChange={e => setDescription(e.target.value)}
                 placeholder={lang === "pt" ? "Uma frase — ajuda o assistente a saber quando usar este skill" : "One sentence — helps the assistant know when to use this skill"}
-                className="w-full bg-neutral-800 border border-neutral-700 rounded-lg px-3 py-2 text-sm text-white placeholder:text-neutral-600 focus:outline-none focus:border-violet-600"
+                className="w-full bg-secondary border border-border rounded-lg px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary"
               />
             </div>
             <div>
-              <label className="text-neutral-400 text-xs block mb-1">
+              <label className="text-muted-foreground text-xs block mb-1">
                 {lang === "pt" ? "Instruções passo-a-passo" : "Step-by-step instructions"}
               </label>
               <textarea
@@ -138,7 +138,7 @@ export default function SkillsPage({ lang, onNavigate }: { lang: Lang; onNavigat
                 onChange={e => setInstructions(e.target.value)}
                 rows={8}
                 placeholder={lang === "pt" ? "Explica ao assistente, passo a passo, como fazer esta tarefa..." : "Explain to the assistant, step by step, how to do this task..."}
-                className="w-full bg-neutral-800 border border-neutral-700 rounded-lg px-3 py-2 text-sm text-white placeholder:text-neutral-600 focus:outline-none focus:border-violet-600 resize-y"
+                className="w-full bg-secondary border border-border rounded-lg px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary resize-y"
               />
             </div>
             {error && <p className="text-red-400 text-xs">{error}</p>}
@@ -146,14 +146,14 @@ export default function SkillsPage({ lang, onNavigate }: { lang: Lang; onNavigat
               <button
                 onClick={submit}
                 disabled={saving}
-                className="bg-violet-700 hover:bg-violet-600 disabled:opacity-50 text-white text-sm font-medium rounded-lg px-4 py-2 transition-colors">
+                className="bg-primary hover:bg-primary/90 disabled:opacity-50 text-primary-foreground text-sm font-medium rounded-lg px-4 py-2 transition-colors">
                 {saving
                   ? (lang === "pt" ? "A guardar..." : "Saving...")
                   : editingId !== null ? (lang === "pt" ? "Guardar alterações" : "Save changes") : (lang === "pt" ? "Guardar skill" : "Save skill")}
               </button>
               <button
                 onClick={cancelForm}
-                className="text-neutral-400 hover:text-white text-sm px-4 py-2 transition-colors">
+                className="text-muted-foreground hover:text-foreground text-sm px-4 py-2 transition-colors">
                 {lang === "pt" ? "Cancelar" : "Cancel"}
               </button>
             </div>
@@ -162,11 +162,11 @@ export default function SkillsPage({ lang, onNavigate }: { lang: Lang; onNavigat
 
         {loading ? (
           <div className="space-y-2">
-            {[1, 2].map(i => <div key={i} className="h-16 bg-neutral-800/50 rounded-xl animate-pulse" />)}
+            {[1, 2].map(i => <div key={i} className="h-16 bg-secondary/50 rounded-xl animate-pulse" />)}
           </div>
         ) : skills.length === 0 ? (
           !showForm && (
-            <div className="text-center py-16 text-neutral-500">
+            <div className="text-center py-16 text-muted-foreground">
               <div className="text-4xl mb-3">🛠️</div>
               <p className="text-sm">
                 {lang === "pt" ? "Ainda sem skills pessoais. Cria o primeiro acima!" : "No personal skills yet. Create your first one above!"}
@@ -176,25 +176,25 @@ export default function SkillsPage({ lang, onNavigate }: { lang: Lang; onNavigat
         ) : (
           <div className="space-y-2">
             {skills.map(s => (
-              <div key={s.id} className="bg-neutral-900 border border-neutral-800 rounded-xl px-4 py-3 group">
+              <div key={s.id} className="bg-card border border-border rounded-xl px-4 py-3 group">
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
-                      <span className="text-neutral-500 shrink-0">🛠️</span>
-                      <span className="text-white text-sm font-medium">{s.name}</span>
+                      <span className="text-muted-foreground shrink-0">🛠️</span>
+                      <span className="text-foreground text-sm font-medium">{s.name}</span>
                     </div>
-                    <p className="text-neutral-400 text-xs mt-1">{s.description}</p>
+                    <p className="text-muted-foreground text-xs mt-1">{s.description}</p>
                   </div>
                   <div className="shrink-0 flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
                     <button
                       onClick={() => startEdit(s)}
-                      className="text-neutral-500 hover:text-violet-400 transition-colors text-xs"
+                      className="text-muted-foreground hover:text-primary transition-colors text-xs"
                       title={lang === "pt" ? "Editar" : "Edit"}>
                       {lang === "pt" ? "Editar" : "Edit"}
                     </button>
                     <button
                       onClick={() => remove(s.id)}
-                      className="text-neutral-600 hover:text-red-400 transition-colors text-lg leading-none"
+                      className="text-muted-foreground hover:text-red-400 transition-colors text-lg leading-none"
                       title={lang === "pt" ? "Eliminar" : "Delete"}>
                       ×
                     </button>

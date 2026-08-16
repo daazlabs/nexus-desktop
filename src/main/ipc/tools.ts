@@ -590,6 +590,7 @@ export function registerIpcHandlers(): void {
       // (bash/filesystem) are denied instead of silently executed.
       requestPermission,
       options?.convId,
+      options?.strictModel === true,
     )
   })
 
@@ -641,6 +642,7 @@ export function registerIpcHandlers(): void {
         options.remoteOllamaUrl,
         options.remoteOllamaKey,
         options?.convId,
+        options?.strictModel === true,
       )
       for await (const chunk of gen) {
         if (!activeStreams.get(id)) break

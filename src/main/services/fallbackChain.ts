@@ -701,6 +701,15 @@ export async function routeWithFallback(
   fallbackOrder?: string[],
   requestPermission?: (action: string, detail: string) => Promise<boolean>,
   conversationId?: string | number,
+  // When the caller picked this exact model on purpose — "Avaliar com…", a
+  // compare-mode slot — a silent substitution defeats the point (the user
+  // asked model A and B for two different opinions, not model B's opinion
+  // twice under A's name). Without this flag an override that fails just
+  // falls through to the general modelClass chain below and comes back
+  // successful-looking under a different model, with the real error only
+  // ever reaching console.warn. strictModel skips that fallthrough and
+  // surfaces the real error instead.
+  strictModel = false,
 ): Promise<ChatResult> {
   const hasImages = messages.some(m => m.images?.length)
 
@@ -710,9 +719,12 @@ export async function routeWithFallback(
     if (filtered.length) {
       try {
         return await tryModels(filtered, messages, maxTokens, tools, requestPermission, modelClass, conversationId)
-      } catch {
+      } catch (err) {
+        if (strictModel) throw err
         console.warn(`[fallback] model override "${model}" failed, falling back`)
       }
+    } else if (strictModel) {
+      throw new Error(`Model "${model}" is not available (no API key configured, or unknown model id).`)
     }
   }
 
@@ -805,6 +817,8 @@ export async function* routeWithFallbackStream(
   remoteOllamaUrl?: string,
   remoteOllamaKey?: string,
   conversationId?: string | number,
+  // See routeWithFallback's strictModel — same reasoning, streaming side.
+  strictModel = false,
 ): AsyncGenerator<string> {
   const hasImages = messages.some(m => m.images?.length)
   // Shared across every model attempt in this request (override branch AND
@@ -866,10 +880,19 @@ export async function* routeWithFallbackStream(
               yield `__MODEL__:${m}`
               return
             }
+            if (strictModel) throw err
           }
         }
       }
     }
+  }
+
+  // Reaching here with strictModel means the override above failed to
+  // return/throw already — no usable key/provider for it, or it's not a
+  // known model id at all. Same silent-substitution risk as the non-strict
+  // path below, just via a different exit than the catch above.
+  if (strictModel && model) {
+    throw new Error(`Model "${model}" is not available (no API key configured, or unknown model id).`)
   }
 
   let fbOrder: string[]

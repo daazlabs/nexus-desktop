@@ -30,7 +30,7 @@ const translations = {
   evalRequestTag:         { pt: "🧪 Pedido de avaliação",   en: "🧪 Evaluation request" },
 
   howCanIHelp:            { pt: "Como posso ajudar?",       en: "How can I help?" },
-  selectModelsToCompare:  { pt: "Seleciona até 3 modelos acima para comparar respostas", en: "Select up to 3 models above to compare responses" },
+  selectModelsToCompare:  { pt: "Seleciona 2 modelos Cérebro acima para comparar respostas", en: "Select 2 Brain models above to compare responses" },
   prompt1Label:           { pt: "Resume este texto",        en: "Summarise this text" },
   prompt1Sub:             { pt: "Cola um texto e peço um resumo", en: "Paste a text and I'll summarise it" },
   prompt2Label:           { pt: "Explica este código",      en: "Explain this code" },

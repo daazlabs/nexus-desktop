@@ -2,15 +2,17 @@ import { useState, useEffect, useRef, useCallback, useMemo, useReducer, type Cha
 import { api } from "../api/client"
 import type { Message, ModelClassKey, CategorizedProvider, ToolEvent, PermissionRequest, Project } from "../types"
 import type { Page } from "../constants"
-import { BarChart3, Settings, HelpCircle, Sun, Moon, X, AlignLeft, MoreVertical, Plus, Brain, Wrench, Download, ArrowDown } from "lucide-react"
+import { BarChart3, Settings, HelpCircle, Sun, Moon, X, AlignLeft, MoreVertical, Plus, Brain, Wrench, Download, ArrowDown, Layers } from "lucide-react"
 import type { Lang } from "../i18n"
 import { t } from "../i18n"
 import ConversationSidebar from "../components/chat/ConversationSidebar"
 import ModelSelector from "../components/chat/ModelSelector"
+import CompareModelSelector from "../components/chat/CompareModelSelector"
 import MessageBubble from "../components/chat/MessageBubble"
 import InputArea from "../components/chat/InputArea"
 import ArtifactPanel from "../components/chat/ArtifactPanel"
 import PromptLibrary from "../components/chat/PromptLibrary"
+import Markdown from "../components/ui/markdown"
 import { ArtifactContext } from "../components/ui/artifact-context"
 import type { Artifact } from "../components/ui/artifact-context"
 import PermissionModal from "../components/PermissionModal"
@@ -79,6 +81,48 @@ function fileIcon(f: AttachedFile): string {
   if (["xlsx","csv"].includes(f.ext)) return "📊"
   if (["docx","doc"].includes(f.ext)) return "📄"
   return "📎"
+}
+
+// Turns the raw error a strict-model failure surfaces with (compare mode,
+// "Avaliar com…") into something a user can act on. fallbackChain.ts's
+// shortError() deliberately collapses provider responses down to just
+// "HTTP <code>" — by design, not a bug, it keeps that function's output
+// short for the cooldown/log plumbing it's mainly used for — so by the
+// time it reaches here it's already lost the provider's own message body.
+// This only maps the codes that matter back into plain language; it
+// doesn't (and can't) recover detail shortError already discarded.
+function friendlyProviderError(raw: string, lang: Lang): string {
+  const cleaned = raw
+    .replace(/^Error invoking remote method '[^']*':\s*/, "")
+    .replace(/^Error:\s*/, "")
+    .replace(/^No model responded\. Errors:\s*/, "")
+    .replace(/^[^:]+:\s*/, "") // drop the leading "modelId: " — the card/bubble already names the model
+    .trim()
+
+  if (/is not available/i.test(cleaned)) {
+    return lang === "pt"
+      ? "Modelo não disponível (sem chave configurada para este provider, ou ID de modelo desconhecido)"
+      : "Model not available (no key configured for this provider, or unknown model id)"
+  }
+  const httpMatch = cleaned.match(/HTTP (\d{3})/)
+  if (httpMatch) {
+    const code = httpMatch[1]
+    const messages: Record<string, [string, string]> = {
+      "400": ["Pedido inválido — o modelo pode não existir para este provider", "Bad request — the model may not exist for this provider"],
+      "401": ["Chave inválida ou sem acesso a este modelo", "Invalid key or no access to this model"],
+      "402": ["Sem créditos para este modelo", "No credits for this model"],
+      "403": ["Acesso negado — o plano não inclui este modelo, ou a chave não tem permissão", "Access denied — plan doesn't include this model, or key lacks permission"],
+      "404": ["Modelo não encontrado neste provider", "Model not found on this provider"],
+      "429": ["Limite de pedidos atingido — tenta mais tarde", "Rate limit reached — try again later"],
+    }
+    const [pt, en] = messages[code] ?? (code.startsWith("5")
+      ? ["Erro no servidor do provider — tenta novamente", "Provider server error — try again"]
+      : [`Erro HTTP ${code}`, `HTTP ${code} error`])
+    return lang === "pt" ? pt : en
+  }
+  if (/timeout/i.test(cleaned)) return lang === "pt" ? "O pedido expirou (timeout)" : "Request timed out"
+  if (/empty completion/i.test(cleaned)) return lang === "pt" ? "O modelo devolveu uma resposta vazia" : "The model returned an empty response"
+  return cleaned || (lang === "pt" ? "Erro desconhecido" : "Unknown error")
 }
 
 function ProjectPromptModal({ lang, project, onSave, onClose }: { lang: Lang; project: Project; onSave: (sp: string, workingDir: string) => void; onClose: () => void }) {
@@ -228,6 +272,14 @@ export default function ChatPage({ active, onNavigate, colorMode, setColorMode, 
     }
     return ids
   }, [availProviders])
+  // Comparison mode: ask up to 2 Cérebro models the same question at once,
+  // answers rendered side by side. Restricted to cerebroModels for the same
+  // reason as "Avaliar com…" above — no free/local models here either.
+  // Uses its own busy flag instead of activeStreamsRef: the parallel replies
+  // are plain non-streaming calls (api.sendToProvider), not a tracked stream.
+  const [multiMode, setMultiMode] = useState(false)
+  const [compareModels, setCompareModels] = useState<string[]>([])
+  const [compareBusy, setCompareBusy] = useState(false)
   // Queue, not a single slot: several conversations can stream (and request
   // tool permission) at the same time, so each needs its own visible prompt
   // instead of the latest one silently replacing an earlier pending one.
@@ -270,6 +322,8 @@ export default function ChatPage({ active, onNavigate, colorMode, setColorMode, 
   // Derived from active streams for the current conversation
   const currentStream = activeStreamsRef.current.get(convId ?? -1)
   const loading = !!currentStream
+  // Input-disabling flag: a normal stream OR a compare-mode round in flight.
+  const busy = loading || compareBusy
   const streamingContent = currentStream?.accum ?? ""
   const toolEvents = currentStream?.toolEvents ?? []
   const activeConvIds = new Set(activeStreamsRef.current.keys())
@@ -619,7 +673,7 @@ export default function ChatPage({ active, onNavigate, colorMode, setColorMode, 
   // after must not require re-selecting it first.
   const sendMessage = async (overrideContent?: string, overrideModel?: string, isEvalPrompt?: boolean) => {
     const override = typeof overrideContent === "string" ? overrideContent.trim() : ""
-    if ((!override && !input.trim() && pendingFiles.length === 0) || loading) return
+    if ((!override && !input.trim() && pendingFiles.length === 0) || busy) return
     let content = override || input.trim()
     if (pendingFiles.length > 0) {
       if (!content) content = lang === "pt" ? "Analisa os seguintes ficheiros:" : "Analyze the following files:"
@@ -642,7 +696,13 @@ export default function ChatPage({ active, onNavigate, colorMode, setColorMode, 
     const placeholderId = -ts
     const userMsg: Message = { id: ts, role: "user", content, ...(isEvalPrompt ? { isEvalPrompt: true } : {}) }
     const currentMessages = messagesRef.current
-    setMessages([...currentMessages, userMsg, { id: placeholderId, role: "assistant", content: "" }])
+    // overrideModel means this is an "Avaliar com…" turn — always single-model,
+    // regardless of whether compare mode happens to be toggled on right now.
+    const useCompare = multiMode && !overrideModel
+    // Compare mode shows its own loading cards (runCompare, below) instead of
+    // this single generic placeholder — it doesn't have a model to label yet.
+    if (!useCompare) setMessages([...currentMessages, userMsg, { id: placeholderId, role: "assistant", content: "" }])
+    else setMessages([...currentMessages, userMsg])
 
     const ipcMessages: { role: string; content: string }[] = []
     // Inject persistent memories (see services/memoryExtraction.ts, main
@@ -708,8 +768,14 @@ export default function ChatPage({ active, onNavigate, colorMode, setColorMode, 
       const savedCurrentMessages = s?.currentMessages ?? currentMessages
       const savedUserMsg = s?.userMsg ?? userMsg
 
+      // "Avaliar com…" errors go through friendlyProviderError (its shape
+      // is a single "modelId: HTTP <code>" reason, same as compare mode) —
+      // a normal AUTO turn that exhausted every fallback has a different,
+      // multi-provider error shape ("All providers failed for class...")
+      // that function isn't built to parse, so that one stays raw as before.
+      const errorText = isError && overrideModel ? friendlyProviderError(fullContent, lang) : fullContent
       const assistantMsg: Message = isError
-        ? { id: ts + 1, role: "assistant", content: `❌ ${fullContent}` }
+        ? { id: ts + 1, role: "assistant", content: `❌ ${errorText}` }
         : { id: ts + 1, role: "assistant", content: fullContent, model }
       const finalMsgs = [...savedCurrentMessages, savedUserMsg, assistantMsg]
 
@@ -740,8 +806,55 @@ export default function ChatPage({ active, onNavigate, colorMode, setColorMode, 
       }
     }
 
+    // Compare mode: fire the same ipcMessages (history + memories + system
+    // prompt already built above) at N Cérebro models in parallel, plain
+    // non-streaming calls — no activeStreamsRef entry, no tool events, same
+    // as the "Avaliar com…" evaluator calls and the context-summary call
+    // above. Mirrors ui/ChatPage.tsx's multi-model mode, minus streaming
+    // (the web version doesn't stream its parallel replies either).
+    const runCompare = async (actualCid: number) => {
+      const modelIds = compareModels.filter(Boolean)
+      if (modelIds.length === 0) return
+      const groupId = `compare-${ts}`
+      const placeholders: Message[] = modelIds.map((modelId, i) => ({
+        id: ts + 1 + i, role: "assistant", content: "", model: modelId, multiGroupId: groupId, isLoading: true,
+      }))
+      setCompareBusy(true)
+      if (actualCid === convIdRef.current && mountedRef.current) {
+        setMessages([...currentMessages, userMsg, ...placeholders])
+      }
+
+      const results = await Promise.allSettled(
+        // strictModel: true — if a chosen model has no credits/key or isn't
+        // a real model id, that slot must show an error, never a different
+        // model's answer relabeled as if it came from the one picked (see
+        // fallbackChain.ts's routeWithFallback).
+        modelIds.map(modelId => api.sendToProvider(ipcMessages, { modelClass: "cerebro", model: modelId, strictModel: true })),
+      )
+
+      const finalAssistantMsgs: Message[] = results.map((r, i) => {
+        const placeholder = placeholders[i]
+        if (r.status === "fulfilled") {
+          return { ...placeholder, content: r.value.content || "", model: r.value.model || modelIds[i], tokens_used: r.value.tokensUsed, isLoading: false }
+        }
+        return { ...placeholder, content: `❌ ${friendlyProviderError(String(r.reason), lang)}`, isLoading: false }
+      })
+      const finalMsgs = [...currentMessages, userMsg, ...finalAssistantMsgs]
+
+      setCompareBusy(false)
+      if (actualCid === convIdRef.current && mountedRef.current) setMessages(finalMsgs)
+      await api.saveMessages(actualCid, finalMsgs).catch(() => null)
+      const curTitle = convsRef.current.find(c => c.id === actualCid)?.title
+      if (!curTitle || curTitle === t(lang, "newConversation")) {
+        const autoTitle = content.length > 42 ? content.slice(0, 40) + "…" : content
+        await api.updateConversationTitle(actualCid, autoTitle).catch(() => null)
+        await loadConvs()
+      }
+    }
+
     const startStream = (actualCid: number) => {
       const effectiveModel = overrideModel || selectedModel
+      const effectiveClass = overrideModel ? "cerebro" : modelClass
       let temperature: number | undefined
       if (effectiveModel && availProviders) {
         for (const providers of Object.values(availProviders)) {
@@ -770,12 +883,18 @@ export default function ChatPage({ active, onNavigate, colorMode, setColorMode, 
       const cancel = api.streamToProvider(
         ipcMessages,
         {
-          // Evaluation always targets a specific paid model explicitly —
-          // don't let the conversation's own AUTO/trabalhador/local class
-          // selection reroute or fall back away from the model the user
-          // picked in the "Avaliar com…" dropdown.
-          modelClass: overrideModel ? "cerebro" : modelClass,
+          // Strict only for an explicit Cérebro (paid) pick — "Avaliar
+          // com…" (always cerebro) or the user manually choosing both the
+          // Cérebro class AND a specific model in the normal ModelSelector.
+          // Never for AUTO, never for "Cérebro, no model picked" (blank
+          // selectedModel = "search any paid model", not "answer with
+          // this one") — those are meant to keep searching if a model has
+          // no tokens/credits. A picked paid model failing must surface a
+          // real error instead of a different model quietly answering in
+          // its place (see fallbackChain.ts's routeWithFallbackStream).
+          modelClass: effectiveClass,
           model: effectiveModel || undefined,
+          strictModel: !!effectiveModel && effectiveClass === "cerebro",
           strategy, temperature, workingDir: activeProject?.working_dir || undefined, toolsEnabled, lang, convId: actualCid,
         },
         (chunk) => {
@@ -809,10 +928,10 @@ export default function ChatPage({ active, onNavigate, colorMode, setColorMode, 
         convIdRef.current = conv.id
         setConvId(conv.id)
         setConvs(prev => prev.some(c => c.id === conv.id) ? prev : [...prev, conv])
-        startStream(conv.id)
+        if (useCompare) runCompare(conv.id); else startStream(conv.id)
       }).catch(() => {})
     } else {
-      startStream(cid)
+      if (useCompare) runCompare(cid); else startStream(cid)
     }
   }
   sendMessageRef.current = sendMessage
@@ -830,8 +949,25 @@ export default function ChatPage({ active, onNavigate, colorMode, setColorMode, 
   }
 
   const renderItems = useMemo(() => {
-    type Item = { type: "single"; msg: Message }
-    const items: Item[] = messages.map(msg => ({ type: "single", msg }))
+    type SingleItem = { type: "single"; msg: Message }
+    type MultiItem = { type: "multi"; groupId: string; msgs: Message[] }
+    const items: Array<SingleItem | MultiItem> = []
+    let i = 0
+    while (i < messages.length) {
+      const msg = messages[i]
+      if (msg.multiGroupId) {
+        const groupId = msg.multiGroupId
+        const groupMsgs: Message[] = []
+        while (i < messages.length && messages[i].multiGroupId === groupId) {
+          groupMsgs.push(messages[i])
+          i++
+        }
+        items.push({ type: "multi", groupId, msgs: groupMsgs })
+      } else {
+        items.push({ type: "single", msg })
+        i++
+      }
+    }
     return items
   }, [messages])
 
@@ -930,6 +1066,11 @@ export default function ChatPage({ active, onNavigate, colorMode, setColorMode, 
             </button>
           </div>
           <div className="hidden md:flex items-center gap-1">
+            <button onClick={() => setMultiMode(p => { if (p) setCompareModels([]); return !p })}
+              className={`p-2 rounded-full transition-colors ${multiMode ? "text-primary bg-primary/10" : "text-muted-foreground hover:text-foreground hover:bg-accent"}`}
+              title={t(lang, "multiModelMode")}>
+              <Layers size={18} />
+            </button>
             <button onClick={() => onNavigate("analytics")}
               className="p-2 rounded-full text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
               title={t(lang, "analyticsTitle")}>
@@ -995,6 +1136,8 @@ export default function ChatPage({ active, onNavigate, colorMode, setColorMode, 
           strategy={strategy} onStrategyChange={setStrategy}
           selectedModel={selectedModel} onModelChange={setSelectedModel} availProviders={availProviders}
           cooldowns={cooldowns} toolsEnabled={toolsEnabled} onToolsToggle={handleToolsToggle} />
+
+        {multiMode && <CompareModelSelector lang={lang} cerebroModels={cerebroModels} compareModels={compareModels} onChange={setCompareModels} />}
 
         {/* System prompt bar */}
         <div className="border-b border-border/50 bg-muted/20 shrink-0">
@@ -1084,7 +1227,7 @@ export default function ChatPage({ active, onNavigate, colorMode, setColorMode, 
               // Normal empty state
               return (
                 <div className="max-w-7xl mx-auto w-full mt-16 flex flex-col items-center gap-6">
-                  <p className="text-muted-foreground/70 text-sm">{t(lang, "howCanIHelp")}</p>
+                  <p className="text-muted-foreground/70 text-sm">{multiMode ? t(lang, "selectModelsToCompare") : t(lang, "howCanIHelp")}</p>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 w-full">
                     {[
                       { label: t(lang, "prompt1Label"), sub: t(lang, "prompt1Sub") },
@@ -1102,7 +1245,7 @@ export default function ChatPage({ active, onNavigate, colorMode, setColorMode, 
                 </div>
               )
             })() : (
-              renderItems.map(item => (
+              renderItems.map(item => item.type === "single" ? (
                 <div key={item.msg.id} className="max-w-7xl mx-auto w-full">
                   {item.msg.id < 0 && convId !== null && summarizingConvIds.has(convId) ? (
                     <div className="flex items-center gap-2 px-3 py-2 text-xs text-muted-foreground animate-pulse">
@@ -1116,12 +1259,46 @@ export default function ChatPage({ active, onNavigate, colorMode, setColorMode, 
                       cerebroModels={cerebroModels} onEvaluate={handleEvaluate} />
                   )}
                 </div>
+              ) : (
+                // Compare-mode group: dedicated card grid, not MessageBubble —
+                // these replies never stream and never carry tool events, so
+                // MessageBubble's isStreaming/toolEvents machinery doesn't
+                // apply. Mirrors ui/ChatPage.tsx's multi-model rendering.
+                <div key={item.groupId} className={`max-w-7xl mx-auto w-full grid gap-3 ${
+                  item.msgs.length >= 2 ? "grid-cols-1 md:grid-cols-2" : "grid-cols-1"
+                }`}>
+                  {item.msgs.map(msg => (
+                    <div key={msg.id} className={`flex flex-col border rounded-xl bg-card overflow-hidden transition-colors ${msg.isLoading ? "border-border/30" : "border-border/50"}`}>
+                      <div className="flex items-center gap-2 px-3 py-2 border-b border-border/40 bg-muted/20 shrink-0">
+                        <span className="text-xs font-mono text-foreground/80 truncate">{msg.model || t(lang, "unknownModel")}</span>
+                        <span className="ml-auto shrink-0">
+                          {msg.isLoading ? (
+                            <span className="text-[10px] text-primary/60 animate-pulse">{t(lang, "generating")}</span>
+                          ) : msg.tokens_used != null && msg.tokens_used > 0 ? (
+                            <span className="text-[10px] text-muted-foreground/50">{msg.tokens_used} tok</span>
+                          ) : null}
+                        </span>
+                      </div>
+                      <div className="overflow-y-auto p-3 max-h-[55vh] text-sm text-foreground">
+                        {msg.isLoading ? (
+                          <div className="flex flex-col gap-2 py-2">
+                            <div className="h-3 bg-muted/60 rounded-full animate-pulse w-3/4" />
+                            <div className="h-3 bg-muted/60 rounded-full animate-pulse w-full" />
+                            <div className="h-3 bg-muted/60 rounded-full animate-pulse w-2/3" />
+                          </div>
+                        ) : (
+                          <Markdown content={msg.content} />
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
               ))
             )}
 
             <div className="max-w-7xl mx-auto w-full">
               <InputArea lang={lang} input={input} onInputChange={setInput} onSend={sendMessage} onStop={handleStop}
-                loading={loading} hasFiles={pendingFiles.length > 0}
+                loading={busy} hasFiles={pendingFiles.length > 0}
                 uploadButton={
                   <>
                     <input type="file" ref={fileInputRef} className="hidden" multiple onChange={handleFileInput}
@@ -1130,7 +1307,7 @@ export default function ChatPage({ active, onNavigate, colorMode, setColorMode, 
                     <button
                       className="bg-muted hover:bg-accent text-muted-foreground hover:text-foreground rounded-full w-9 h-9 flex items-center justify-center font-bold text-lg shrink-0 transition-colors border border-border"
                       onClick={() => fileInputRef.current?.click()}
-                      disabled={loading}
+                      disabled={busy}
                       title={lang === "pt" ? "Anexar ficheiro" : "Attach file"}>
                       +
                     </button>

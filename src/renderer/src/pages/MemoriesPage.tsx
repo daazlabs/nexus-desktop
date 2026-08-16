@@ -45,29 +45,29 @@ export default function MemoriesPage({ lang, onNavigate }: { lang: Lang; onNavig
   }
 
   return (
-    <div className="min-h-screen bg-neutral-950">
-      <header className="bg-neutral-900 border-b border-neutral-800 px-4 py-3">
+    <div className="min-h-screen bg-background">
+      <header className="bg-card border-b border-border px-4 py-3">
         <div className="max-w-2xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-2">
             <span className="text-xl">🧠</span>
-            <h1 className="text-white font-bold text-lg">
+            <h1 className="text-foreground font-bold text-lg">
               {lang === "pt" ? "Memórias" : "Memories"}
             </h1>
           </div>
-          <button onClick={() => onNavigate("chat")} className="text-neutral-400 hover:text-white transition-colors text-sm">
+          <button onClick={() => onNavigate("chat")} className="text-muted-foreground hover:text-foreground transition-colors text-sm">
             ← {lang === "pt" ? "Voltar ao chat" : "Back to chat"}
           </button>
         </div>
       </header>
 
       <div className="max-w-2xl mx-auto p-4 space-y-4">
-        <p className="text-neutral-400 text-sm">
+        <p className="text-muted-foreground text-sm">
           {lang === "pt"
             ? "Factos que o assistente tem em conta em todas as conversas. Podes adicionar informação pessoal para respostas mais personalizadas."
             : "Facts the assistant keeps in mind across all conversations. Add personal information for more personalized responses."}
         </p>
 
-        {msg && <div className="bg-neutral-800 border border-neutral-700 rounded-xl px-4 py-3 text-sm text-white">{msg}</div>}
+        {msg && <div className="bg-secondary border border-border rounded-xl px-4 py-3 text-sm text-foreground">{msg}</div>}
 
         <div className="flex items-center justify-between">
           <button
@@ -78,22 +78,22 @@ export default function MemoriesPage({ lang, onNavigate }: { lang: Lang; onNavig
         </div>
 
         {adding && (
-          <div className="bg-neutral-900 border border-neutral-700 rounded-xl p-4 space-y-3">
+          <div className="bg-card border border-border rounded-xl p-4 space-y-3">
             <textarea
               value={newFact}
               onChange={e => setNewFact(e.target.value)}
               onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); addMemory() } if (e.key === "Escape") setAdding(false) }}
               placeholder={lang === "pt" ? "Ex: Prefiro respostas em português, sou developer Python..." : "Ex: I prefer concise answers, I'm a Python developer..."}
-              className="w-full bg-neutral-800 text-white rounded-lg px-3 py-2 text-sm outline-none border border-neutral-700 focus:border-primary/50 resize-none"
+              className="w-full bg-secondary text-foreground rounded-lg px-3 py-2 text-sm outline-none border border-border focus:border-primary/50 resize-none"
               rows={3}
               autoFocus
             />
             <div className="flex gap-2 justify-end">
-              <button onClick={() => setAdding(false)} className="text-xs text-neutral-400 hover:text-white px-3 py-1.5 transition-colors">
+              <button onClick={() => setAdding(false)} className="text-xs text-muted-foreground hover:text-foreground px-3 py-1.5 transition-colors">
                 {lang === "pt" ? "Cancelar" : "Cancel"}
               </button>
               <button onClick={addMemory} disabled={!newFact.trim()}
-                className="text-xs bg-primary text-white rounded-full px-4 py-1.5 hover:opacity-90 disabled:opacity-40 transition-opacity">
+                className="text-xs bg-primary text-primary-foreground rounded-full px-4 py-1.5 hover:opacity-90 disabled:opacity-40 transition-opacity">
                 {lang === "pt" ? "Guardar" : "Save"}
               </button>
             </div>
@@ -102,10 +102,10 @@ export default function MemoriesPage({ lang, onNavigate }: { lang: Lang; onNavig
 
         {loading ? (
           <div className="space-y-2">
-            {[1, 2, 3].map(i => <div key={i} className="h-12 bg-neutral-800/50 rounded-xl animate-pulse" />)}
+            {[1, 2, 3].map(i => <div key={i} className="h-12 bg-secondary/50 rounded-xl animate-pulse" />)}
           </div>
         ) : memories.length === 0 ? (
-          <div className="text-center py-16 text-neutral-500">
+          <div className="text-center py-16 text-muted-foreground">
             <div className="text-4xl mb-3">🧠</div>
             <p className="text-sm">
               {lang === "pt" ? "Ainda sem memórias. Adiciona factos sobre ti!" : "No memories yet. Add facts about yourself!"}
@@ -114,14 +114,14 @@ export default function MemoriesPage({ lang, onNavigate }: { lang: Lang; onNavig
         ) : (
           <>
             <div className="flex items-center justify-between">
-              <span className="text-neutral-500 text-xs">{memories.length} {lang === "pt" ? "factos guardados" : "facts saved"}</span>
+              <span className="text-muted-foreground text-xs">{memories.length} {lang === "pt" ? "factos guardados" : "facts saved"}</span>
               {clearConfirm ? (
                 <div className="flex items-center gap-2">
                   <span className="text-red-400 text-xs">{lang === "pt" ? "Tens a certeza?" : "Are you sure?"}</span>
                   <button onClick={clearAll} className="text-xs bg-red-700 hover:bg-red-600 text-white px-2 py-1 rounded transition-colors">
                     {lang === "pt" ? "Sim, apagar tudo" : "Yes, clear all"}
                   </button>
-                  <button onClick={() => setClearConfirm(false)} className="text-xs bg-neutral-700 hover:bg-neutral-600 text-white px-2 py-1 rounded transition-colors">
+                  <button onClick={() => setClearConfirm(false)} className="text-xs bg-secondary hover:bg-secondary/70 text-secondary-foreground px-2 py-1 rounded transition-colors">
                     {lang === "pt" ? "Cancelar" : "Cancel"}
                   </button>
                 </div>
@@ -133,14 +133,14 @@ export default function MemoriesPage({ lang, onNavigate }: { lang: Lang; onNavig
             </div>
             <div className="space-y-2">
               {memories.map(m => (
-                <div key={m.id} className="bg-neutral-900 border border-neutral-800 rounded-xl px-4 py-3 flex items-start justify-between gap-3 group">
+                <div key={m.id} className="bg-card border border-border rounded-xl px-4 py-3 flex items-start justify-between gap-3 group">
                   <div className="flex items-start gap-2 min-w-0">
-                    <span className="text-neutral-500 mt-0.5 shrink-0">💡</span>
-                    <span className="text-white text-sm">{m.fact}</span>
+                    <span className="text-muted-foreground mt-0.5 shrink-0">💡</span>
+                    <span className="text-foreground text-sm">{m.fact}</span>
                   </div>
                   <button
                     onClick={() => remove(m.id)}
-                    className="shrink-0 text-neutral-600 hover:text-red-400 transition-colors opacity-0 group-hover:opacity-100 text-lg leading-none mt-0.5"
+                    className="shrink-0 text-muted-foreground hover:text-red-400 transition-colors opacity-0 group-hover:opacity-100 text-lg leading-none mt-0.5"
                     title={lang === "pt" ? "Eliminar" : "Delete"}>
                     ×
                   </button>

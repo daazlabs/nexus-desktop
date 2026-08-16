@@ -1,6 +1,6 @@
 {
   "name": "nexus-desktop",
-  "version": "1.0.45",
+  "version": "1.0.46",
   "description": "DaazNexus Desktop — Electron client",
   "desktopName": "com.daazlabs.DaazNexus",
   "repository": {

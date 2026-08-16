@@ -106,7 +106,13 @@ export const api = {
 
   sendToProvider: async (
     messages: { role: string; content: string }[],
-    options: { modelClass?: string; model?: string; strategy?: string; temperature?: number; toolsEnabled?: boolean },
+    // strictModel: when `model` is set, fail instead of silently falling
+    // back to a different model if it errors out (no credits, no key, wrong
+    // id, etc). Off by default — the summarization call that already used
+    // this function wants the normal resilient fallback; compare-mode and
+    // "Avaliar com…" want the model the user actually picked, or a clear
+    // error, never a different model's answer relabeled as if it were fine.
+    options: { modelClass?: string; model?: string; strategy?: string; temperature?: number; toolsEnabled?: boolean; strictModel?: boolean },
   ): Promise<{ content: string; model?: string; tokensUsed?: number; duration?: number }> => {
     return nexusApi.providers?.send?.(messages, options) || { content: "No provider available" }
   },
@@ -121,7 +127,7 @@ export const api = {
 
   streamToProvider: (
     messages: { role: string; content: string }[],
-    options: { modelClass?: string; model?: string; strategy?: string; temperature?: number; workingDir?: string; toolsEnabled?: boolean; lang?: string; convId?: number },
+    options: { modelClass?: string; model?: string; strategy?: string; temperature?: number; workingDir?: string; toolsEnabled?: boolean; lang?: string; convId?: number; strictModel?: boolean },
     onChunk: (chunk: string) => void,
     onDone: (result: { content: string; model: string }) => void,
     onError: (err: string) => void,
